@@ -88,6 +88,16 @@ logging:
 export MOMA_API_KEY="your-api-key-here"
 ```
 
+> **⚠️ 环境变量不会持久化！** `export` 设置的环境变量在终端关闭后就丢失了，每次打开新终端或 `git pull` 更新后都需要重新 `export`。**一劳永逸的方法：**
+>
+> ```bash
+> # 写入 shell 配置文件，永久生效
+> echo 'export MOMA_API_KEY="your-api-key-here"' >> ~/.bashrc
+> source ~/.bashrc
+> ```
+>
+> 这样无论重启终端还是 `git pull` 更新代码，API Key 都在，无需再次设置。
+
 ### 4. 启动代理
 
 #### Conda 环境
