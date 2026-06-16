@@ -1,6 +1,6 @@
 # MOMA Proxy
 
-MOMA 平台 GLM-5.1 到 Codex/Anthropic 协议转换的 API 代理。
+将 GLM-5.1 非标准 streaming 输出转换为 Codex 兼容的 Responses API 格式的代理。
 
 ## 问题背景
 
@@ -9,19 +9,37 @@ MOMA 平台的 GLM-5.1 模型在 streaming 输出时会先输出 `reasoning_cont
 ## 解决方案
 
 本代理：
-1. 接收标准 OpenAI 格式请求
+1. 接收标准 OpenAI / Responses API 格式请求
 2. 转发到 GLM 平台
 3. 解析 GLM 的非标准 streaming 输出（过滤 reasoning）
-4. 返回 Codex 兼容的 OpenAI 格式响应
+4. 返回 Codex 兼容的 Responses API 格式响应
+
+## 前置依赖
+
+| 依赖 | 安装方式 | 用途 |
+|------|----------|------|
+| **Python ≥ 3.11** | 系统包管理器或 conda | 运行代理 |
+| **Codex CLI** | `npm install -g @openai/codex` | 如果你需要用 `moma` 命令在 Codex 中使用 GLM |
+| **MOMA 平台 API Key** | 在 MOMA 平台申请 | 访问 GLM-5.1 模型 |
+
+> **注意：** Codex CLI 是可选的。如果你只用 Python SDK 或 curl 调用代理，不需要安装 Codex。
 
 ## 快速开始
 
-### 1. 安装
+### 1. 安装代理
 
 ```bash
-# 创建 conda 环境
-conda create -n moma_proxy python=3.11 -y
-conda activate moma_proxy
+# 克隆仓库
+git clone git@github.com:STEVE-1936550490/MoMa_proxy.git
+cd MoMa_proxy
+
+# 创建虚拟环境（推荐）
+python -m venv .venv
+source .venv/bin/activate
+
+# 或使用 conda
+# conda create -n moma_proxy python=3.11 -y
+# conda activate moma_proxy
 
 # 安装依赖
 pip install -e ".[dev]"
@@ -29,18 +47,18 @@ pip install -e ".[dev]"
 
 ### 2. 配置
 
-复制配置模板并修改：
+复制配置模板并填入你的 API Key：
 
 ```bash
 cp config.yaml.example config.yaml
 ```
 
-配置文件示例：
+编辑 `config.yaml`：
 
 ```yaml
 upstream:
   base_url: "https://moma.cmecloud.cn/v1"
-  api_key: "your-api-key"
+  api_key: "${MOMA_API_KEY}"   # 推荐使用环境变量，也可直接填入 key
 
 server:
   host: "0.0.0.0"
@@ -52,25 +70,62 @@ logging:
   level: "INFO"
 ```
 
-### 3. 启动
+**安全提示：** `config.yaml` 已在 `.gitignore` 中排除，不会被提交到 Git。推荐使用环境变量方式配置 API Key：
 
 ```bash
-cd /root/moma_proxy && conda activate moma_proxy && python -m moma_proxy --config config.yaml
+export MOMA_API_KEY="your-api-key-here"
 ```
 
-### 4. 使用
-
-代理启动后，将你的 API 请求发送到代理地址而非 GLM 平台直连：
+### 3. 启动代理
 
 ```bash
-# 原本直接调用 GLM
-curl https://moma.cmecloud.cn/v1/chat/completions ...
-
-# 现通过代理调用（过滤掉 reasoning，只返回 content）
-curl http://localhost:8080/v1/chat/completions ...
+python -m moma_proxy --config config.yaml
 ```
 
-**请求示例（Chat Completions）：**
+验证代理是否正常运行：
+
+```bash
+curl http://localhost:8080/health
+# 应返回 {"status": "healthy"}
+```
+
+### 4. 在 Codex 中使用（可选）
+
+如果你想让 Codex 通过此代理使用 GLM-5.1：
+
+```bash
+# 确保 Codex CLI 已安装
+npm install -g @openai/codex
+
+# 一键注册 MOMA profile 到 Codex
+moma-proxy install-codex
+
+# 使用 MOMA Codex
+moma
+
+# 默认 Codex（GPT）不受影响
+codex
+```
+
+如果你的代理不在默认地址 `127.0.0.1:8080`：
+
+```bash
+moma-proxy install-codex --base-url http://127.0.0.1:9000/v1
+```
+
+## 端点说明
+
+| 端点 | 说明 |
+|------|------|
+| `/v1/chat/completions` | Chat Completions（OpenAI 格式） |
+| `/v1/completions` | Legacy Completions（自动转换为 chat 格式） |
+| `/v1/responses` | Responses API（Codex 兼容，含 tool_calls 支持） |
+| `/v1/models` | 模型列表 |
+| `/health` | 健康检查 |
+
+## 请求示例
+
+**Chat Completions：**
 
 ```bash
 curl -X POST "http://localhost:8080/v1/chat/completions" \
@@ -83,7 +138,7 @@ curl -X POST "http://localhost:8080/v1/chat/completions" \
   }'
 ```
 
-**请求示例（Responses API - ccswitch）：**
+**Responses API（Codex 格式）：**
 
 ```bash
 curl -X POST "http://localhost:8080/v1/responses" \
@@ -95,54 +150,14 @@ curl -X POST "http://localhost:8080/v1/responses" \
   }'
 ```
 
-**请求示例（Responses API - Codex 多模态格式）：**
-
-```bash
-curl -X POST "http://localhost:8080/v1/responses" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "ZHIPU/GLM-5.1",
-    "input": [{"role": "user", "content": [{"text": "你好"}]}],
-    "stream": true
-  }'
-```
-
-**格式转换说明：** `/v1/responses` 端点会自动将 Codex 的多模态格式（数组）转换为 GLM 平台所需的简单字符串格式。
-
-**响应示例：**
-
-```
-data: {"id":"chatcmpl-xxx","object":"chat.completion.chunk","model":"ZHIPU/GLM-5.1","choices":[{"index":0,"delta":{"content":"你好"},"finish_reason":null}]}
-
-data: {"id":"chatcmpl-xxx","object":"chat.completion.chunk","model":"ZHIPU/GLM-5.1","choices":[{"index":0,"delta":{"content":"！"},"finish_reason":null}]}
-
-data: {"id":"chatcmpl-xxx","object":"chat.completion.chunk","model":"ZHIPU/GLM-5.1","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
-
-data: [DONE]
-```
-
-## 端点说明
-
-| 端点 | 说明 |
-|------|------|
-| `/v1/chat/completions` | Chat completions（OpenAI 格式） |
-| `/v1/completions` | Legacy completions（转换为 chat 格式） |
-| `/v1/responses` | Responses API（ccswitch 兼容，转换为 chat 格式） |
-| `/health` | 健康检查 |
-
-**性能优化：** `/v1/responses` 端点已优化，响应时间约 4-5秒（GLM-5.1 上游处理为主）。
-
-## 在客户端中使用
-
-将客户端的 API base URL 改为代理地址：
+**Python SDK：**
 
 ```python
-# Python OpenAI SDK
 from openai import OpenAI
 
 client = OpenAI(
     base_url="http://localhost:8080/v1",
-    api_key="any-key"  # 代理会使用配置文件中的 upstream api_key
+    api_key="any-key"  # 代理使用 config.yaml 中的 upstream api_key
 )
 
 response = client.chat.completions.create(
@@ -152,114 +167,56 @@ response = client.chat.completions.create(
 )
 
 for chunk in response:
-    print(chunk.choices[0].delta.content)
+    if chunk.choices[0].delta.content:
+        print(chunk.choices[0].delta.content, end="")
 ```
 
-## 在 Codex 中使用 MOMA
-
-本项目会把 MOMA 注册成 Codex 的独立 profile，同时保留默认 `codex` 继续走 OpenAI/GPT。
-
-### 安装 Codex profile
-
-安装或更新 Codex 的 MOMA provider/profile：
+## CLI 命令
 
 ```bash
-moma-proxy install-codex
-```
+# 启动代理服务器
+moma-proxy serve --config config.yaml
+# 或直接
+python -m moma_proxy --config config.yaml
 
-安装后：
+# 安装 Codex MOMA profile
+moma-proxy install-codex [--base-url URL] [--codex-home PATH]
 
-- 默认 Codex：运行 `codex`，仍走默认 GPT。
-- MOMA Codex：运行 `moma`，等价于带环境变量执行 `codex -p moma`。
-
-如果你的代理不是 `127.0.0.1:8080`，安装时指定地址：
-
-```bash
-moma-proxy install-codex --base-url http://127.0.0.1:9000/v1
-```
-
-该命令会写入以下配置：
-
-`~/.codex/config.toml` 保留默认模型，同时注册本地代理 provider：
-
-```toml
-[model_providers.moma_proxy]
-name = "MOMA Proxy"
-base_url = "http://127.0.0.1:8080/v1"
-env_key = "MOMA_PROXY_API_KEY"
-wire_api = "responses"
-```
-
-`~/.codex/moma.config.toml` 只负责切换模型和 provider：
-
-```toml
-model = "ZHIPU/GLM-5.1"
-model_provider = "moma_proxy"
-```
-
-Codex 要求自定义 provider 的 `env_key` 存在。`moma` 命令会自动注入这个客户端侧 key；代理会忽略它，真实 MOMA key 来自本项目的 `config.yaml`。
-
-### 启动和验证
-
-```bash
-# 启动代理
-cd /root/moma_proxy && conda activate moma_proxy && python -m moma_proxy --config config.yaml
-```
-
-另开一个终端使用 MOMA Codex：
-
-```bash
+# 通过 MOMA 启动 Codex
 moma
+# 等价于 codex -p moma，自动注入客户端侧 API key
 ```
 
-验证非交互调用：
+## 配置选项
 
-```bash
-moma exec -C /root/moma_proxy "只输出 OK 两个字母，不要解释。"
+| 字段 | 说明 | 默认值 |
+|------|------|--------|
+| `upstream.base_url` | GLM 平台 API 地址 | 必填 |
+| `upstream.api_key` | GLM 平台 API 密钥，支持 `${ENV_VAR}` 环境变量展开 | 必填 |
+| `server.host` | 代理服务监听地址 | `0.0.0.0` |
+| `server.port` | 代理服务端口 | `8080` |
+| `mode` | 输出协议模式：`codex` 或 `anthropic`（暂未实现） | `codex` |
+| `logging.level` | 日志级别 | `INFO` |
+
+## 项目结构
+
 ```
-
-输出中应能看到：
-
-```text
-model: ZHIPU/GLM-5.1
-provider: mycodex
-codex
-OK
-```
-
-默认 GPT Codex 仍然使用：
-
-```bash
-codex
-```
-
-也可以直接验证 Responses API：
-
-```bash
-curl -sS http://127.0.0.1:8080/v1/responses \
-  -H "Content-Type: application/json" \
-  -d '{"model":"ZHIPU/GLM-5.1","input":[{"role":"user","content":"hello"}],"stream":true}'
-```
-
-### 回滚方式
-
-如果 MOMA profile 不可用，不要把默认 Codex 改成 MOMA。先继续用默认 GPT：
-
-```bash
-codex
-```
-
-如需彻底恢复 Codex 配置，使用最近的备份覆盖：
-
-```bash
-cp /root/.codex/config.toml.bak-before-profile-20260615-234703 /root/.codex/config.toml
-```
-
-如果没有这个备份，手动把 `/root/.codex/config.toml` 开头改回：
-
-```toml
-model = "gpt-5.5"
-model_provider = "openai"
+src/moma_proxy/
+├── __init__.py
+├── __main__.py          # python -m 入口
+├── main.py              # CLI 入口（serve / install-codex / codex）
+├── server.py            # aiohttp 服务器
+├── config.py            # YAML 配置加载，支持环境变量展开
+├── codex.py             # Codex profile 安装与启动逻辑
+├── codex_cli.py         # `moma` 命令入口
+├── handlers/
+│   └── openai.py        # OpenAI / Responses API 协议处理器
+├── parsers/
+│   └── glm.py           # GLM-5.1 流解析器（分离 reasoning/content/tool_call）
+└── transformers/
+    ├── codex.py         # Chat Completions 格式转换
+    ├── responses.py     # Responses API 格式转换（含 tool_calls 生命周期事件）
+    └── anthropic.py     # Anthropic 格式转换（TODO）
 ```
 
 ## 开发
@@ -279,20 +236,13 @@ isort src tests
 mypy src
 ```
 
-## 配置选项
-
-| 字段 | 说明 | 默认值 |
-|------|------|--------|
-| `upstream.base_url` | GLM 平台 API 地址 | 必填 |
-| `upstream.api_key` | GLM 平台 API 密钥 | 必填 |
-| `server.host` | 代理服务监听地址 | `0.0.0.0` |
-| `server.port` | 代理服务端口 | `8080` |
-| `mode` | 输出协议模式 | `codex` |
-| `logging.level` | 日志级别 | `INFO` |
-
 ## TODO
 
-- [x] `/v1/responses` 端点支持（ccswitch 兼容）
-- [x] 性能优化（响应时间优化至 4.8秒）
+- [x] `/v1/responses` 端点支持（Codex 兼容）
+- [x] 性能优化（响应时间优化至 4.8 秒）
 - [x] MOMA 工具调用格式验证（标准 OpenAI tool_calls）
 - [ ] Anthropic 协议支持（Claude Code 兼容）
+
+## License
+
+MIT
