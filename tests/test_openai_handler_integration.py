@@ -1,0 +1,298 @@
+"""Integration tests for the OpenAI-compatible proxy handler."""
+
+import json
+
+import aiohttp
+import pytest
+from aiohttp import web
+
+from moma_proxy.config import Config, ServerConfig, UpstreamConfig
+from moma_proxy.server import ProxyServer
+
+
+async def _start_app(app: web.Application) -> tuple[web.AppRunner, str]:
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "127.0.0.1", 0)
+    try:
+        await site.start()
+    except (OSError, PermissionError) as exc:
+        await runner.cleanup()
+        pytest.skip(f"local TCP bind unavailable in this environment: {exc}")
+
+    sockets = site._server.sockets
+    assert sockets is not None
+    port = sockets[0].getsockname()[1]
+    return runner, f"http://127.0.0.1:{port}"
+
+
+async def _write_glm_stream(response: web.StreamResponse) -> None:
+    chunks = [
+        {"choices": [{"delta": {"reasoning_content": "thinking should be hidden"}}]},
+        {"choices": [{"delta": {"content": "Hello"}}]},
+        {"choices": [{"delta": {"content": " world"}}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+    ]
+    for chunk in chunks:
+        await response.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
+    await response.write(b"data: [DONE]\n\n")
+
+
+async def _start_mock_upstream(
+    seen_payloads: list[dict],
+) -> tuple[web.AppRunner, str]:
+    async def handle_chat(request: web.Request) -> web.StreamResponse:
+        seen_payloads.append(await request.json())
+        response = web.StreamResponse(
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+            }
+        )
+        await response.prepare(request)
+        await _write_glm_stream(response)
+        await response.write_eof()
+        return response
+
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", handle_chat)
+    return await _start_app(app)
+
+
+async def _start_mock_tool_upstream(
+    seen_payloads: list[dict],
+) -> tuple[web.AppRunner, str]:
+    async def handle_chat(request: web.Request) -> web.StreamResponse:
+        seen_payloads.append(await request.json())
+        response = web.StreamResponse(
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+            }
+        )
+        await response.prepare(request)
+        chunks = [
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_shell_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "shell",
+                                        "arguments": "{\"cmd\"",
+                                    },
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "function": {
+                                        "arguments": ": \"pwd\"}",
+                                    },
+                                }
+                            ]
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
+            },
+        ]
+        for chunk in chunks:
+            await response.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
+        await response.write(b"data: [DONE]\n\n")
+        await response.write_eof()
+        return response
+
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", handle_chat)
+    return await _start_app(app)
+
+
+async def _start_proxy(upstream_base_url: str) -> tuple[web.AppRunner, str]:
+    config = Config(
+        upstream=UpstreamConfig(base_url=f"{upstream_base_url}/v1", api_key="test-key"),
+        server=ServerConfig(host="127.0.0.1", port=0),
+    )
+    proxy = ProxyServer(config)
+    proxy.app.on_startup.append(proxy.on_startup)
+    proxy.app.on_cleanup.append(proxy.on_cleanup)
+    return await _start_app(proxy.app)
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_stream_filters_reasoning() -> None:
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_upstream(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy(upstream_url)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{proxy_url}/v1/chat/completions",
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "messages": [{"role": "user", "content": "Say hello"}],
+                    "stream": True,
+                    "temperature": None,
+                },
+            ) as response:
+                assert response.status == 200
+                text = await response.text()
+
+        assert "thinking should be hidden" not in text
+        assert '"role": "assistant"' in text
+        assert "Hello" in text
+        assert " world" in text
+        assert "data: [DONE]" in text
+        assert seen_payloads[0]["stream"] is True
+        assert "temperature" not in seen_payloads[0]
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_chat_completions_non_stream_returns_json() -> None:
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_upstream(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy(upstream_url)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{proxy_url}/v1/chat/completions",
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "messages": [{"role": "user", "content": "Say hello"}],
+                    "stream": False,
+                },
+            ) as response:
+                assert response.status == 200
+                payload = await response.json()
+
+        assert payload["object"] == "chat.completion"
+        assert payload["choices"][0]["message"]["content"] == "Hello world"
+        assert seen_payloads[0]["stream"] is True
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_converts_input_and_emits_lifecycle_events() -> None:
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_upstream(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy(upstream_url)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{proxy_url}/v1/responses",
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "input": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "input_text", "text": "Say"},
+                                {"type": "input_text", "text": "hello"},
+                            ],
+                        }
+                    ],
+                    "stream": True,
+                },
+            ) as response:
+                assert response.status == 200
+                text = await response.text()
+
+        assert seen_payloads[0]["messages"] == [{"role": "user", "content": "Say hello"}]
+        assert "thinking should be hidden" not in text
+        assert "event: response.output_item.added" in text
+        assert "event: response.output_text.delta" in text
+        assert "event: response.output_text.done" in text
+        assert "event: response.completed" in text
+        assert "Hello world" in text
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_bridges_function_tools() -> None:
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_tool_upstream(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy(upstream_url)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{proxy_url}/v1/responses",
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "input": [
+                        {"role": "user", "content": "run pwd"},
+                        {
+                            "type": "function_call_output",
+                            "call_id": "call_prev",
+                            "output": "/root/moma_proxy",
+                        },
+                    ],
+                    "tools": [
+                        {
+                            "type": "function",
+                            "name": "shell",
+                            "description": "Run a shell command",
+                            "parameters": {
+                                "type": "object",
+                                "properties": {"cmd": {"type": "string"}},
+                                "required": ["cmd"],
+                            },
+                        }
+                    ],
+                    "tool_choice": "auto",
+                    "stream": True,
+                },
+            ) as response:
+                assert response.status == 200
+                text = await response.text()
+
+        assert seen_payloads[0]["tools"] == [
+            {
+                "type": "function",
+                "function": {
+                    "name": "shell",
+                    "description": "Run a shell command",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"cmd": {"type": "string"}},
+                        "required": ["cmd"],
+                    },
+                },
+            }
+        ]
+        assert seen_payloads[0]["tool_choice"] == "auto"
+        assert seen_payloads[0]["messages"][1] == {
+            "role": "tool",
+            "tool_call_id": "call_prev",
+            "content": "/root/moma_proxy",
+        }
+        assert "response.function_call_arguments.delta" in text
+        assert "response.function_call_arguments.done" in text
+        assert '"type": "function_call"' in text
+        assert '"call_id": "call_shell_1"' in text
+        assert '{\\"cmd\\": \\"pwd\\"}' in text
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
