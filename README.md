@@ -30,12 +30,12 @@ MOMA 平台的 GLM-5.1 模型在 streaming 输出时会先输出 `reasoning_cont
 
 ```bash
 # 克隆仓库
-git clone git@github.com:STEVE-1936550490/MoMa_proxy.git
+git clone https://github.com/STEVE-1936550490/MoMa_proxy.git
 cd MoMa_proxy
 
-# 创建虚拟环境（推荐）
+# 创建虚拟环境
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate   # ⚠️ 每次使用前都需要激活
 
 # 或使用 conda
 # conda create -n moma_proxy python=3.11 -y
@@ -79,6 +79,7 @@ export MOMA_API_KEY="your-api-key-here"
 ### 3. 启动代理
 
 ```bash
+source .venv/bin/activate   # 激活虚拟环境
 python -m moma_proxy --config config.yaml
 ```
 
@@ -97,15 +98,21 @@ curl http://localhost:8080/health
 # 确保 Codex CLI 已安装
 npm install -g @openai/codex
 
+# 激活虚拟环境
+source .venv/bin/activate
+
 # 一键注册 MOMA profile 到 Codex
 moma-proxy install-codex
 
 # 使用 MOMA Codex
+source .venv/bin/activate
 moma
 
 # 默认 Codex（GPT）不受影响
 codex
 ```
+
+> **⚠️ 提醒：** `moma`、`moma-proxy` 等命令都安装在虚拟环境中，每次使用前需要 `source .venv/bin/activate`，否则会提示 command not found。
 
 如果你的代理不在默认地址 `127.0.0.1:8080`：
 
@@ -174,6 +181,9 @@ for chunk in response:
 ## CLI 命令
 
 ```bash
+# 激活虚拟环境（每次使用前必须执行）
+source .venv/bin/activate
+
 # 启动代理服务器
 moma-proxy serve --config config.yaml
 # 或直接
