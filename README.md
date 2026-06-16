@@ -85,18 +85,12 @@ logging:
 **安全提示：** `config.yaml` 已在 `.gitignore` 中排除，不会被提交到 Git。推荐使用环境变量方式配置 API Key：
 
 ```bash
-export MOMA_API_KEY="your-api-key-here"
+# 写入 ~/.bashrc 永久生效（重启终端、git pull 更新后都无需重新设置）
+echo 'export MOMA_API_KEY="your-api-key-here"' >> ~/.bashrc
+source ~/.bashrc
 ```
 
-> **⚠️ 环境变量不会持久化！** `export` 设置的环境变量在终端关闭后就丢失了，每次打开新终端或 `git pull` 更新后都需要重新 `export`。**一劳永逸的方法：**
->
-> ```bash
-> # 写入 shell 配置文件，永久生效
-> echo 'export MOMA_API_KEY="your-api-key-here"' >> ~/.bashrc
-> source ~/.bashrc
-> ```
->
-> 这样无论重启终端还是 `git pull` 更新代码，API Key 都在，无需再次设置。
+> 如果不想写 bashrc，也可以直接把 key 填入 `config.yaml` 的 `api_key` 字段（明文，仅限本地开发使用）。
 
 ### 4. 启动代理
 
