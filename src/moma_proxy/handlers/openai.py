@@ -9,7 +9,9 @@ from typing import TYPE_CHECKING
 from aiohttp import web
 
 from ..config import Config
+from ..observability import REQ_CLIENT_PROTOCOL, REQ_MODEL, REQ_PROVIDER_PROTOCOL, REQ_STREAM_STATE
 from ..parsers.glm import ContentType, GLMParser
+from ..transformers.anthropic import AnthropicTransformer
 from ..transformers.codex import CodexResponseBuilder, CodexTransformer
 from ..transformers.responses import ResponsesTransformer
 
@@ -296,9 +298,11 @@ class OpenAIHandler:
                                     "type": "function",
                                     "function": {
                                         "name": name,
-                                        "arguments": arguments
-                                        if isinstance(arguments, str)
-                                        else json.dumps(arguments),
+                                        "arguments": (
+                                            arguments
+                                            if isinstance(arguments, str)
+                                            else json.dumps(arguments)
+                                        ),
                                     },
                                 }
                             ],
@@ -333,6 +337,110 @@ class OpenAIHandler:
 
         return converted_messages
 
+    def _anthropic_content_to_text(self, content) -> str:
+        """Extract text from Anthropic content blocks."""
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return ""
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                if item.get("type") == "text" and isinstance(item.get("text"), str):
+                    parts.append(item["text"])
+                elif item.get("type") == "tool_result":
+                    parts.append(self._content_to_text(item.get("content")))
+        return " ".join(part for part in parts if part)
+
+    def _anthropic_messages_to_chat_messages(self, body: dict) -> list[dict]:
+        """Convert Anthropic Messages input to Chat Completions messages."""
+        messages: list[dict] = []
+        system = body.get("system")
+        if system:
+            messages.append({"role": "system", "content": self._anthropic_content_to_text(system)})
+
+        for message in body.get("messages") or []:
+            if not isinstance(message, dict):
+                continue
+            role = message.get("role", "user")
+            content = message.get("content")
+            if isinstance(content, list):
+                tool_results = [
+                    item
+                    for item in content
+                    if isinstance(item, dict) and item.get("type") == "tool_result"
+                ]
+                tool_uses = [
+                    item
+                    for item in content
+                    if isinstance(item, dict) and item.get("type") == "tool_use"
+                ]
+                for tool_result in tool_results:
+                    tool_use_id = tool_result.get("tool_use_id")
+                    if isinstance(tool_use_id, str):
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": tool_use_id,
+                                "content": self._anthropic_content_to_text(
+                                    tool_result.get("content")
+                                ),
+                            }
+                        )
+                if tool_uses and role == "assistant":
+                    messages.append(
+                        {
+                            "role": "assistant",
+                            "content": self._anthropic_content_to_text(content),
+                            "tool_calls": [
+                                {
+                                    "id": item.get("id"),
+                                    "type": "function",
+                                    "function": {
+                                        "name": item.get("name"),
+                                        "arguments": json.dumps(item.get("input") or {}),
+                                    },
+                                }
+                                for item in tool_uses
+                                if item.get("id") and item.get("name")
+                            ],
+                        }
+                    )
+                    continue
+
+            messages.append(
+                {
+                    "role": role if role in {"user", "assistant", "system"} else "user",
+                    "content": self._anthropic_content_to_text(content),
+                }
+            )
+        return messages
+
+    def _anthropic_tools_to_chat_tools(self, tools) -> list[dict] | None:
+        """Convert Anthropic tools to Chat Completions function tools."""
+        if not isinstance(tools, list):
+            return None
+        converted: list[dict] = []
+        for tool in tools:
+            if not isinstance(tool, dict):
+                continue
+            name = tool.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            converted.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "description": tool.get("description", ""),
+                        "parameters": tool.get("input_schema") or {},
+                    },
+                }
+            )
+        return converted or None
+
     async def handle_chat_completions(
         self, request: web.Request, session: "aiohttp.ClientSession | None"
     ) -> web.StreamResponse:
@@ -354,7 +462,11 @@ class OpenAIHandler:
             return body
 
         url, headers, payload = self._prepare_upstream_request(request, body)
-        model = body.get("model", "glm-5.1")
+        model = body.get("model", self.config.default_model)
+        request[REQ_MODEL] = model
+        request[REQ_CLIENT_PROTOCOL] = "openai_chat"
+        request[REQ_PROVIDER_PROTOCOL] = "openai_chat"
+        request[REQ_STREAM_STATE] = "streaming" if body.get("stream", False) else "buffering"
         client_wants_stream = bool(body.get("stream", False))
 
         logger.info("Forwarding chat request to %s", url)
@@ -425,7 +537,7 @@ class OpenAIHandler:
 
         # Wrap prompt in messages format for upstream
         chat_body = {
-            "model": body.get("model", "glm-5.1"),
+            "model": body.get("model", self.config.default_model),
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": body.get("max_tokens"),
             "temperature": body.get("temperature"),
@@ -433,7 +545,11 @@ class OpenAIHandler:
         }
 
         url, headers, payload = self._prepare_upstream_request(request, chat_body)
-        model = chat_body.get("model", "glm-5.1")
+        model = chat_body.get("model", self.config.default_model)
+        request[REQ_MODEL] = model
+        request[REQ_CLIENT_PROTOCOL] = "openai_completion"
+        request[REQ_PROVIDER_PROTOCOL] = "openai_chat"
+        request[REQ_STREAM_STATE] = "streaming" if body.get("stream", False) else "buffering"
         client_wants_stream = bool(body.get("stream", False))
 
         logger.info("Forwarding completions request to %s", url)
@@ -525,7 +641,7 @@ class OpenAIHandler:
             return self._error_response("Empty input", 400)
 
         chat_body = {
-            "model": body.get("model", "ZHIPU/GLM-5.1"),
+            "model": body.get("model", self.config.default_model),
             "messages": converted_messages,  # Use converted messages
             "max_tokens": body.get("max_tokens"),
             "temperature": body.get("temperature"),
@@ -534,14 +650,16 @@ class OpenAIHandler:
         tools = self._responses_tools_to_chat_tools(body.get("tools"))
         if tools:
             chat_body["tools"] = tools
-        tool_choice = self._responses_tool_choice_to_chat_tool_choice(
-            body.get("tool_choice")
-        )
+        tool_choice = self._responses_tool_choice_to_chat_tool_choice(body.get("tool_choice"))
         if tool_choice is not None:
             chat_body["tool_choice"] = tool_choice
 
         url, headers, payload = self._prepare_upstream_request(request, chat_body)
-        model = chat_body.get("model", "ZHIPU/GLM-5.1")
+        model = chat_body.get("model", self.config.default_model)
+        request[REQ_MODEL] = model
+        request[REQ_CLIENT_PROTOCOL] = "codex_responses"
+        request[REQ_PROVIDER_PROTOCOL] = "openai_chat"
+        request[REQ_STREAM_STATE] = "streaming" if body.get("stream", False) else "buffering"
         client_wants_stream = bool(body.get("stream", False))
 
         logger.info("Forwarding responses request to %s", url)
@@ -561,7 +679,9 @@ class OpenAIHandler:
 
                 if not client_wants_stream:
                     content, _finish_reason = await self._collect_chunks(parsed_chunks)
-                    return web.json_response(self._build_responses_json(model=model, content=content))
+                    return web.json_response(
+                        self._build_responses_json(model=model, content=content)
+                    )
 
                 response = web.StreamResponse(
                     status=200,
@@ -582,4 +702,83 @@ class OpenAIHandler:
 
         except Exception as e:
             logger.exception("Error handling responses request")
+            return self._error_response(f"Internal error: {str(e)}", 500)
+
+    async def handle_anthropic_messages(
+        self, request: web.Request, session: "aiohttp.ClientSession | None"
+    ) -> web.StreamResponse:
+        """Handle /v1/messages endpoint (Anthropic Messages API)."""
+        if session is None:
+            return self._error_response("Server not initialized", 500)
+
+        body = await self._read_json_body(request)
+        if isinstance(body, web.Response):
+            return body
+
+        messages = self._anthropic_messages_to_chat_messages(body)
+        if not messages:
+            return self._error_response("Empty messages", 400)
+
+        chat_body = {
+            "model": body.get("model", self.config.default_model),
+            "messages": messages,
+            "max_tokens": body.get("max_tokens"),
+            "temperature": body.get("temperature"),
+            "stream": True,
+        }
+        tools = self._anthropic_tools_to_chat_tools(body.get("tools"))
+        if tools:
+            chat_body["tools"] = tools
+
+        url, headers, payload = self._prepare_upstream_request(request, chat_body)
+        model = chat_body.get("model", self.config.default_model)
+        request[REQ_MODEL] = model
+        request[REQ_CLIENT_PROTOCOL] = "anthropic"
+        request[REQ_PROVIDER_PROTOCOL] = "openai_chat"
+        request[REQ_STREAM_STATE] = "streaming" if body.get("stream", False) else "buffering"
+        client_wants_stream = bool(body.get("stream", False))
+
+        logger.info("Forwarding anthropic messages request to %s", url)
+
+        try:
+            async with session.post(url, json=payload, headers=headers) as upstream_resp:
+                if upstream_resp.status != 200:
+                    error_body = await upstream_resp.text()
+                    logger.error("Upstream error: %s - %s", upstream_resp.status, error_body)
+                    return self._error_response(
+                        f"Upstream error: {upstream_resp.status}: {error_body}",
+                        upstream_resp.status,
+                    )
+
+                parser = GLMParser()
+                parsed_chunks = parser.parse_stream(upstream_resp)
+                transformer = AnthropicTransformer(model=model)
+
+                if not client_wants_stream:
+                    content, finish_reason = await self._collect_chunks(parsed_chunks)
+                    stop_reason = (
+                        "end_turn" if finish_reason == "stop" else finish_reason or "end_turn"
+                    )
+                    return web.json_response(
+                        transformer.build_message_json(content=content, stop_reason=stop_reason)
+                    )
+
+                response = web.StreamResponse(
+                    status=200,
+                    headers={
+                        "Content-Type": "text/event-stream",
+                        "Cache-Control": "no-cache",
+                        "Connection": "keep-alive",
+                    },
+                )
+                await response.prepare(request)
+
+                async for sse_event in transformer.transform_stream(parsed_chunks):
+                    await response.write(sse_event.encode("utf-8"))
+
+                await response.write_eof()
+                return response
+
+        except Exception as e:
+            logger.exception("Error handling anthropic messages request")
             return self._error_response(f"Internal error: {str(e)}", 500)

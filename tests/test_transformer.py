@@ -3,6 +3,7 @@
 import pytest
 
 from moma_proxy.parsers.glm import ContentType, GLMStreamChunk
+from moma_proxy.transformers.anthropic import AnthropicTransformer
 from moma_proxy.transformers.codex import CodexTransformer
 from moma_proxy.transformers.responses import ResponsesTransformer
 
@@ -104,7 +105,7 @@ async def test_responses_transform_tool_call_stream():
                     "index": 0,
                     "id": "call_123",
                     "type": "function",
-                    "function": {"name": "shell", "arguments": "{\"cmd\""},
+                    "function": {"name": "shell", "arguments": '{"cmd"'},
                 }
             ],
         )
@@ -115,7 +116,7 @@ async def test_responses_transform_tool_call_stream():
             tool_calls=[
                 {
                     "index": 0,
-                    "function": {"arguments": ": \"pwd\"}"},
+                    "function": {"arguments": ': "pwd"}'},
                 }
             ],
         )
@@ -132,3 +133,65 @@ async def test_responses_transform_tool_call_stream():
     assert '"type": "function_call"' in text
     assert '"call_id": "call_123"' in text
     assert '{\\"cmd\\": \\"pwd\\"}' in text
+
+
+@pytest.mark.asyncio
+async def test_anthropic_transform_text_stream():
+    """Test Anthropic transformer emits text lifecycle events."""
+    transformer = AnthropicTransformer(model="ZHIPU/GLM-5.1")
+
+    async def mock_chunks():
+        yield GLMStreamChunk(ContentType.REASONING, "Thinking", "raw1")
+        yield GLMStreamChunk(ContentType.CONTENT, "Hello", "raw2")
+        yield GLMStreamChunk(ContentType.CONTENT, " world", "raw3")
+        yield GLMStreamChunk(ContentType.DONE, "", "raw4")
+
+    events = []
+    async for event in transformer.transform_stream(mock_chunks()):
+        events.append(event)
+
+    text = "".join(events)
+    assert "message_start" in text
+    assert "content_block_start" in text
+    assert "text_delta" in text
+    assert "Hello" in text
+    assert "Thinking" not in text
+    assert "message_stop" in text
+
+
+@pytest.mark.asyncio
+async def test_anthropic_transform_tool_use_stream():
+    """Test Anthropic transformer emits tool_use blocks."""
+    transformer = AnthropicTransformer(model="ZHIPU/GLM-5.1")
+
+    async def mock_chunks():
+        yield GLMStreamChunk(
+            ContentType.TOOL_CALL,
+            "",
+            "raw1",
+            tool_calls=[
+                {
+                    "index": 0,
+                    "id": "call_123",
+                    "type": "function",
+                    "function": {"name": "shell", "arguments": '{"cmd"'},
+                }
+            ],
+        )
+        yield GLMStreamChunk(
+            ContentType.TOOL_CALL,
+            "",
+            "raw2",
+            tool_calls=[{"index": 0, "function": {"arguments": ': "pwd"}'}}],
+        )
+        yield GLMStreamChunk(ContentType.DONE, "", "raw3")
+
+    events = []
+    async for event in transformer.transform_stream(mock_chunks()):
+        events.append(event)
+
+    text = "".join(events)
+    assert '"type": "tool_use"' in text
+    assert '"name": "shell"' in text
+    assert "input_json_delta" in text
+    assert "tool_use" in text

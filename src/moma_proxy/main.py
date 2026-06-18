@@ -17,6 +17,8 @@ from .codex import (
     run_codex_with_moma,
 )
 from .config import Config
+from .installer import DEFAULT_NPM_REGISTRY, format_install_summary, run_local_install
+from .launcher import RunConfig, run_managed_client
 from .server import run_server
 
 
@@ -38,11 +40,48 @@ def _add_server_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _add_provider_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--platform",
+        "-p",
+        help="Provider name from config providers",
+    )
+    parser.add_argument(
+        "--base-url",
+        help="Temporary provider base URL override",
+    )
+    parser.add_argument(
+        "--api-key",
+        help="Temporary provider API key override",
+    )
+    parser.add_argument(
+        "--api-key-env",
+        help="Environment variable containing the temporary provider API key",
+    )
+    parser.add_argument(
+        "--model",
+        help="Temporary default model override",
+    )
+    parser.add_argument(
+        "--provider-api",
+        choices=["openai_chat", "openai_responses", "anthropic_messages"],
+        help="Provider API protocol",
+    )
+    parser.add_argument(
+        "--client-protocol",
+        choices=["codex_responses", "anthropic"],
+        help="Client wire protocol",
+    )
+
+
 def _run_server_from_args(args: argparse.Namespace) -> int:
     try:
         config = Config.from_file(args.config)
     except FileNotFoundError:
         print(f"Error: Config file not found: {args.config}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
         return 1
 
     # Override with CLI args
@@ -50,6 +89,19 @@ def _run_server_from_args(args: argparse.Namespace) -> int:
         config.server.host = args.host
     if args.port:
         config.server.port = args.port
+    try:
+        config.apply_provider(
+            getattr(args, "platform", None),
+            base_url=getattr(args, "base_url", None),
+            api_key=getattr(args, "api_key", None),
+            api_key_env=getattr(args, "api_key_env", None),
+            model=getattr(args, "model", None),
+            provider_api=getattr(args, "provider_api", None),
+            client_protocol=getattr(args, "client_protocol", None),
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
 
     # Setup logging
     logging.basicConfig(
@@ -78,15 +130,141 @@ def _install_codex_from_args(args: argparse.Namespace) -> int:
     return 0
 
 
+def _install_from_args(args: argparse.Namespace) -> int:
+    install_config = CodexInstallConfig(
+        codex_home=Path(args.codex_home).expanduser(),
+        profile=args.profile,
+        provider=args.provider,
+        model=args.model,
+        base_url=args.base_url,
+        env_key=args.env_key,
+    )
+    try:
+        summary = run_local_install(
+            config_path=Path(args.config).expanduser(),
+            template_path=Path(args.template).expanduser(),
+            codex_install_config=install_config,
+            install_codex_cli=args.install_codex_cli,
+            install_claude_code=args.install_claude_code,
+            install_codex_profile_enabled=not args.skip_codex_profile,
+            npm_registry=args.npm_registry,
+        )
+    except (FileNotFoundError, RuntimeError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    print(format_install_summary(summary))
+    return 0
+
+
+def _run_from_args(args: argparse.Namespace) -> int:
+    config_path = Path(args.config).expanduser()
+    try:
+        config = Config.from_file(config_path)
+    except FileNotFoundError:
+        print(f"Error: Config file not found: {args.config}", file=sys.stderr)
+        return 1
+    except ValueError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    host = args.host or config.server.host
+    port = args.port or config.server.port
+    run_config = RunConfig(
+        config_path=config_path,
+        host=host,
+        port=port,
+        client=args.client,
+        platform=args.platform,
+        base_url=args.base_url,
+        api_key=args.api_key,
+        api_key_env=args.api_key_env,
+        model=args.model,
+        provider_api=args.provider_api,
+        client_protocol=args.client_protocol,
+        codex_profile=args.codex_profile,
+        codex_env_key=args.codex_env_key,
+        codex_api_key=args.codex_api_key,
+        claude_api_key=args.claude_api_key,
+        client_args=args.client_args,
+        startup_timeout=args.startup_timeout,
+    )
+    try:
+        return run_managed_client(run_config)
+    except RuntimeError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level CLI parser."""
     parser = argparse.ArgumentParser(
-        description="MOMA Proxy - GLM-5.1 to Codex/Anthropic protocol conversion"
+        description="AgentBridge - local gateway for Codex/Claude Code model providers"
     )
     subparsers = parser.add_subparsers(dest="command")
 
     serve_parser = subparsers.add_parser("serve", help="Run the local proxy server")
     _add_server_args(serve_parser)
+    _add_provider_args(serve_parser)
+
+    run_parser = subparsers.add_parser(
+        "run",
+        help="Start the proxy, wait for health, then run an agent client",
+    )
+    _add_server_args(run_parser)
+    _add_provider_args(run_parser)
+    run_parser.add_argument("--client", choices=["codex", "claude"], default="codex")
+    run_parser.add_argument("--codex-profile", default=DEFAULT_PROFILE)
+    run_parser.add_argument("--codex-env-key", default=DEFAULT_ENV_KEY)
+    run_parser.add_argument("--codex-api-key", default="dummy")
+    run_parser.add_argument("--claude-api-key", default="dummy")
+    run_parser.add_argument("--startup-timeout", type=float, default=15.0)
+    run_parser.add_argument("client_args", nargs=argparse.REMAINDER)
+
+    setup_parser = subparsers.add_parser(
+        "install",
+        help="Run cross-platform local setup checks and create missing config/profile files",
+    )
+    setup_parser.add_argument(
+        "--config",
+        default="config.yaml",
+        help="Config file to create if missing (default: config.yaml)",
+    )
+    setup_parser.add_argument(
+        "--template",
+        default="config.yaml.example",
+        help="Config template path (default: config.yaml.example)",
+    )
+    setup_parser.add_argument(
+        "--install-codex-cli",
+        action="store_true",
+        help="Install Codex CLI with npm if codex is not found",
+    )
+    setup_parser.add_argument(
+        "--install-claude-code",
+        action="store_true",
+        help="Install Claude Code CLI with npm if claude is not found",
+    )
+    setup_parser.add_argument(
+        "--npm-registry",
+        default=DEFAULT_NPM_REGISTRY,
+        help=f"npm registry for CLI installs (default: {DEFAULT_NPM_REGISTRY})",
+    )
+    setup_parser.add_argument(
+        "--skip-codex-profile",
+        action="store_true",
+        help="Skip Codex provider/profile registration",
+    )
+    setup_parser.add_argument(
+        "--codex-home",
+        default=str(default_codex_home()),
+        help="Codex home directory (default: $CODEX_HOME or ~/.codex)",
+    )
+    setup_parser.add_argument("--profile", default=DEFAULT_PROFILE)
+    setup_parser.add_argument("--provider", default=DEFAULT_PROVIDER)
+    setup_parser.add_argument("--model", default=DEFAULT_MODEL)
+    setup_parser.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    setup_parser.add_argument("--env-key", default=DEFAULT_ENV_KEY)
 
     install_parser = subparsers.add_parser(
         "install-codex",
@@ -121,15 +299,20 @@ def main(argv: list[str] | None = None) -> int:
     # Preserve the original CLI shape: `moma-proxy --config config.yaml`.
     if not argv or argv[0].startswith("-"):
         legacy_parser = argparse.ArgumentParser(
-            description="MOMA Proxy - GLM-5.1 to Codex/Anthropic protocol conversion"
+            description="AgentBridge - local gateway for Codex/Claude Code model providers"
         )
         _add_server_args(legacy_parser)
+        _add_provider_args(legacy_parser)
         return _run_server_from_args(legacy_parser.parse_args(argv))
 
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "serve":
         return _run_server_from_args(args)
+    if args.command == "run":
+        return _run_from_args(args)
+    if args.command == "install":
+        return _install_from_args(args)
     if args.command == "install-codex":
         return _install_codex_from_args(args)
     if args.command == "codex":

@@ -83,7 +83,7 @@ async def _start_mock_tool_upstream(
                                     "type": "function",
                                     "function": {
                                         "name": "shell",
-                                        "arguments": "{\"cmd\"",
+                                        "arguments": '{"cmd"',
                                     },
                                 }
                             ]
@@ -99,7 +99,7 @@ async def _start_mock_tool_upstream(
                                 {
                                     "index": 0,
                                     "function": {
-                                        "arguments": ": \"pwd\"}",
+                                        "arguments": ': "pwd"}',
                                     },
                                 }
                             ]
@@ -293,6 +293,182 @@ async def test_responses_stream_bridges_function_tools() -> None:
         assert '"type": "function_call"' in text
         assert '"call_id": "call_shell_1"' in text
         assert '{\\"cmd\\": \\"pwd\\"}' in text
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_structured_logs_include_request_metadata() -> None:
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_upstream(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy(upstream_url)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{proxy_url}/v1/responses",
+                headers={"X-Request-ID": "req_test_123"},
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "input": "Say hello",
+                    "stream": False,
+                },
+            ) as response:
+                assert response.status == 200
+                assert response.headers["X-Request-ID"] == "req_test_123"
+                await response.text()
+
+            async with session.get(f"{proxy_url}/logs") as response:
+                assert response.status == 200
+                payload = await response.json()
+
+        logs = payload["data"]
+        response_log = next(log for log in logs if log["request_id"] == "req_test_123")
+        assert response_log["path"] == "/v1/responses"
+        assert response_log["status"] == 200
+        assert response_log["model"] == "ZHIPU/GLM-5.1"
+        assert response_log["client_protocol"] == "codex_responses"
+        assert response_log["provider_protocol"] == "openai_chat"
+        assert response_log["token_usage"]["source"] == "unavailable"
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_dashboard_serves_log_view() -> None:
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_upstream(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy(upstream_url)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{proxy_url}/dashboard") as response:
+                assert response.status == 200
+                text = await response.text()
+
+        assert "AgentBridge Dashboard" in text
+        assert "/logs?limit=200" in text
+        assert "token" in text.lower()
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_non_stream_returns_message() -> None:
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_upstream(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy(upstream_url)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{proxy_url}/v1/messages",
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "messages": [{"role": "user", "content": "Say hello"}],
+                    "max_tokens": 100,
+                    "stream": False,
+                },
+            ) as response:
+                assert response.status == 200
+                payload = await response.json()
+
+        assert seen_payloads[0]["messages"] == [{"role": "user", "content": "Say hello"}]
+        assert payload["type"] == "message"
+        assert payload["role"] == "assistant"
+        assert payload["content"][0]["text"] == "Hello world"
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_stream_emits_events() -> None:
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_upstream(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy(upstream_url)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{proxy_url}/v1/messages",
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [{"type": "text", "text": "Say hello"}],
+                        }
+                    ],
+                    "max_tokens": 100,
+                    "stream": True,
+                },
+            ) as response:
+                assert response.status == 200
+                text = await response.text()
+
+        assert "event: message_start" in text
+        assert "event: content_block_delta" in text
+        assert "Hello" in text
+        assert "thinking should be hidden" not in text
+        assert "event: message_stop" in text
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_bridges_tools() -> None:
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_tool_upstream(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy(upstream_url)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{proxy_url}/v1/messages",
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": "call_prev",
+                                    "content": "/root/moma_proxy",
+                                },
+                                {"type": "text", "text": "run pwd"},
+                            ],
+                        }
+                    ],
+                    "tools": [
+                        {
+                            "name": "shell",
+                            "description": "Run a shell command",
+                            "input_schema": {
+                                "type": "object",
+                                "properties": {"cmd": {"type": "string"}},
+                            },
+                        }
+                    ],
+                    "stream": True,
+                },
+            ) as response:
+                assert response.status == 200
+                text = await response.text()
+
+        assert seen_payloads[0]["tools"][0]["function"]["name"] == "shell"
+        assert seen_payloads[0]["messages"][0] == {
+            "role": "tool",
+            "tool_call_id": "call_prev",
+            "content": "/root/moma_proxy",
+        }
+        assert '"type": "tool_use"' in text
+        assert "input_json_delta" in text
     finally:
         await proxy_runner.cleanup()
         await upstream_runner.cleanup()

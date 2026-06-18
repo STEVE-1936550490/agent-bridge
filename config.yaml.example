@@ -10,9 +10,22 @@ upstream:
   # Or set directly (NOT recommended for git-tracked files):
   # api_key: "your-api-key-here"
 
+# New provider-aware configuration. The legacy `upstream` block above remains
+# supported; providers make `-p <platform>` selection possible.
+active_provider: "moma"
+default_model: "ZHIPU/GLM-5.1"
+
+providers:
+  moma:
+    base_url: "https://moma.cmecloud.cn/v1"
+    api_key_env: "MOMA_API_KEY"
+    model: "ZHIPU/GLM-5.1"
+    provider_api: "openai_chat"       # openai_chat | openai_responses | anthropic_messages
+    client_protocol: "codex_responses" # codex_responses | anthropic
+
 server:
   host: "0.0.0.0"
-  port: 8080
+  port: 17681
 
 mode: "codex"  # "codex" or "anthropic" (anthropic not yet implemented)
 

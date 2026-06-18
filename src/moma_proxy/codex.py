@@ -8,11 +8,10 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-
 DEFAULT_PROFILE = "moma"
 DEFAULT_PROVIDER = "moma_proxy"
 DEFAULT_MODEL = "ZHIPU/GLM-5.1"
-DEFAULT_BASE_URL = "http://127.0.0.1:8080/v1"
+DEFAULT_BASE_URL = "http://127.0.0.1:17681/v1"
 DEFAULT_ENV_KEY = "MOMA_PROXY_API_KEY"
 
 

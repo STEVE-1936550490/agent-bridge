@@ -1,16 +1,23 @@
 """Tests for Codex integration helpers."""
 
 import os
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
 from moma_proxy.codex import (
+    DEFAULT_BASE_URL,
     CodexInstallConfig,
     install_codex_profile,
     render_codex_config,
     run_codex_with_moma,
 )
 from moma_proxy.main import main
+
+
+def test_default_codex_base_url_uses_agentbridge_port() -> None:
+    assert DEFAULT_BASE_URL == "http://127.0.0.1:17681/v1"
 
 
 def test_render_codex_config_preserves_default_model() -> None:
@@ -25,7 +32,7 @@ name = "OpenAI"
     config = CodexInstallConfig(
         codex_home=Path("/tmp/codex"),
         provider="moma_proxy",
-        base_url="http://127.0.0.1:8080/v1",
+        base_url="http://127.0.0.1:17681/v1",
     )
 
     rendered = render_codex_config(existing, config)
@@ -83,6 +90,67 @@ def test_main_install_codex_uses_codex_home(tmp_path: Path) -> None:
     assert result == 0
     assert (tmp_path / "config.toml").exists()
     assert (tmp_path / "moma.config.toml").exists()
+
+
+def test_main_serve_rejects_unsupported_protocol_pair(tmp_path: Path) -> None:
+    """CLI validates provider/client protocols before starting the server."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+upstream:
+  base_url: "https://api.example.com/v1"
+  api_key: "test-key"
+""",
+        encoding="utf-8",
+    )
+
+    result = main(
+        [
+            "serve",
+            "--config",
+            str(config_path),
+            "--provider-api",
+            "anthropic_messages",
+            "--client-protocol",
+            "codex_responses",
+        ]
+    )
+
+    assert result == 1
+
+
+def test_python_module_entrypoint_propagates_exit_code(tmp_path: Path) -> None:
+    """python -m moma_proxy should return the main() exit code."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        """
+upstream:
+  base_url: "https://api.example.com/v1"
+  api_key: "test-key"
+""",
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "moma_proxy",
+            "serve",
+            "--config",
+            str(config_path),
+            "--provider-api",
+            "anthropic_messages",
+            "--client-protocol",
+            "codex_responses",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 1
+    assert "Unsupported protocol combination" in completed.stderr
 
 
 def test_run_codex_with_moma_injects_env_key() -> None:

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "moma-proxy"
 version = "0.1.0"
-description = "API proxy for GLM-5.1 to Codex/Anthropic protocol conversion"
+description = "AgentBridge gateway for Codex/Claude Code compatible model providers"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -26,6 +26,7 @@ dev = [
 ]
 
 [project.scripts]
+agent-bridge = "moma_proxy.main:main"
 moma-proxy = "moma_proxy.main:main"
 moma = "moma_proxy.codex_cli:main"
 
