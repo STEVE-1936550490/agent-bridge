@@ -49,7 +49,23 @@ def test_build_client_command_for_codex() -> None:
         client_args=["exec", "hello"],
     )
 
-    assert build_client_command(config) == ["codex", "-p", "moma", "exec", "hello"]
+    with patch("moma_proxy.launcher.shutil.which", return_value=None):
+        command = build_client_command(config)
+
+    assert command == ["codex", "-p", "moma", "exec", "hello"]
+
+
+def test_build_client_command_resolves_windows_command_shim() -> None:
+    config = RunConfig(
+        config_path=Path("config.yaml"),
+        host="127.0.0.1",
+        port=17681,
+    )
+
+    with patch("moma_proxy.launcher.shutil.which", return_value=r"C:\npm\codex.cmd"):
+        command = build_client_command(config)
+
+    assert command == [r"C:\npm\codex.cmd", "-p", "moma"]
 
 
 def test_build_client_command_and_env_for_claude() -> None:
@@ -61,7 +77,8 @@ def test_build_client_command_and_env_for_claude() -> None:
         client_args=["--help"],
     )
 
-    command = build_client_command(config)
+    with patch("moma_proxy.launcher.shutil.which", return_value=None):
+        command = build_client_command(config)
     env = build_client_env(config)
 
     assert command == ["claude", "--help"]
@@ -122,9 +139,10 @@ def test_run_managed_client_starts_proxy_then_client_and_cleans_up(tmp_path: Pat
         client_args=["exec", "hello"],
     )
 
-    with patch("moma_proxy.launcher.wait_for_health", return_value=True):
-        with patch("moma_proxy.launcher.subprocess.Popen", fake_popen):
-            result = run_managed_client(config)
+    with patch("moma_proxy.launcher.shutil.which", return_value=None):
+        with patch("moma_proxy.launcher.wait_for_health", return_value=True):
+            with patch("moma_proxy.launcher.subprocess.Popen", fake_popen):
+                result = run_managed_client(config)
 
     assert result == 0
     assert created[0].command[2:4] == ["moma_proxy", "serve"]

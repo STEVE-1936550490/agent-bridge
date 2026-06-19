@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -81,12 +82,14 @@ def build_proxy_command(config: RunConfig) -> list[str]:
 def build_client_command(config: RunConfig) -> list[str]:
     """Build the selected client command."""
     if config.client == "codex":
-        command = ["codex", "-p", config.codex_profile]
+        executable = shutil.which("codex") or "codex"
+        command = [executable, "-p", config.codex_profile]
         if config.client_args:
             command.extend(config.client_args)
         return command
     if config.client == "claude":
-        command = ["claude"]
+        executable = shutil.which("claude") or "claude"
+        command = [executable]
         if config.client_args:
             command.extend(config.client_args)
         return command
