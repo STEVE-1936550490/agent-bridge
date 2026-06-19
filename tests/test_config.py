@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from moma_proxy.config import Config, ProviderConfig, ServerConfig, UpstreamConfig
+from agent_bridge.config import Config, ProviderConfig, ServerConfig, UpstreamConfig
 
 
 def test_upstream_config_env_expansion():

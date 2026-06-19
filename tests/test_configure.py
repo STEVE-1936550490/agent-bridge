@@ -4,8 +4,8 @@ from pathlib import Path
 
 import yaml
 
-from moma_proxy.configure import ConfigureOptions, configure_provider
-from moma_proxy.main import main
+from agent_bridge.configure import ConfigureOptions, configure_provider
+from agent_bridge.main import main
 
 
 def test_configure_provider_writes_provider_config_from_flags(tmp_path: Path) -> None:
@@ -56,7 +56,7 @@ def test_main_configure_no_interactive(tmp_path: Path) -> None:
             "--codex-home",
             str(codex_home),
             "--provider",
-            "moma",
+            "moma_glm51",
             "--base-url",
             "https://moma.example.com/v1",
             "--api-key-env",
@@ -73,10 +73,10 @@ def test_main_configure_no_interactive(tmp_path: Path) -> None:
 
     data = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert result == 0
-    assert data["providers"]["moma"]["base_url"] == "https://moma.example.com/v1"
-    assert data["providers"]["moma"]["api_key_env"] == "MOMA_API_KEY"
+    assert data["providers"]["moma_glm51"]["base_url"] == "https://moma.example.com/v1"
+    assert data["providers"]["moma_glm51"]["api_key_env"] == "MOMA_API_KEY"
     assert (codex_home / "config.toml").exists()
-    assert (codex_home / "moma.config.toml").exists()
+    assert (codex_home / "agent_bridge.config.toml").exists()
 
 
 def test_main_configure_syncs_codex_profile_to_local_proxy(tmp_path: Path) -> None:
@@ -111,10 +111,10 @@ def test_main_configure_syncs_codex_profile_to_local_proxy(tmp_path: Path) -> No
     )
 
     codex_config = (codex_home / "config.toml").read_text(encoding="utf-8")
-    codex_profile = (codex_home / "moma.config.toml").read_text(encoding="utf-8")
+    codex_profile = (codex_home / "agent_bridge.config.toml").read_text(encoding="utf-8")
     assert result == 0
     assert 'base_url = "http://127.0.0.1:19001/v1"' in codex_config
-    assert 'env_key = "MOMA_PROXY_API_KEY"' in codex_config
+    assert 'env_key = "AGENT_BRIDGE_API_KEY"' in codex_config
     assert 'model = "local-model"' in codex_profile
 
 

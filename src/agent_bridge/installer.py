@@ -51,9 +51,12 @@ class InstallSummary:
 def package_version() -> str:
     """Return the installed package version when available."""
     try:
-        return importlib.metadata.version("moma-proxy")
+        return importlib.metadata.version("agent-bridge")
     except importlib.metadata.PackageNotFoundError:
-        return "editable/local"
+        try:
+            return importlib.metadata.version("moma-proxy")
+        except importlib.metadata.PackageNotFoundError:
+            return "editable/local"
 
 
 def detect_tools() -> list[ToolStatus]:
@@ -159,7 +162,7 @@ def format_install_summary(summary: InstallSummary) -> str:
         "AgentBridge setup summary",
         f"- Platform: {summary.platform_name}",
         f"- Python: {summary.python_version} ({summary.python_executable})",
-        f"- Package: moma-proxy {summary.package_version}",
+        f"- Package: agent-bridge {summary.package_version}",
         f"- npm registry: {summary.npm_registry}",
     ]
 
@@ -195,5 +198,8 @@ def format_install_summary(summary: InstallSummary) -> str:
             f"compatibility path with `npm install -g {CLAUDE_CODE_PACKAGE} "
             f"--registry {summary.npm_registry}` or rerun with `--install-claude-code`."
         )
-    lines.append("- Default Codex remains unchanged; use `moma` for the MOMA profile.")
+    lines.append(
+        "- Default Codex remains unchanged; use `codex -p agent_bridge` "
+        "or `agent-bridge start` for AgentBridge."
+    )
     return "\n".join(lines)

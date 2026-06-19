@@ -1,4 +1,4 @@
-"""CLI entry point for MOMA proxy."""
+"""CLI entry point for AgentBridge."""
 
 import argparse
 import logging
@@ -14,7 +14,7 @@ from .codex import (
     CodexInstallConfig,
     default_codex_home,
     install_codex_profile,
-    run_codex_with_moma,
+    run_codex_with_agent_bridge,
 )
 from .config import Config
 from .configure import (
@@ -383,7 +383,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     install_parser = subparsers.add_parser(
         "install-codex",
-        help="Install or update the Codex MOMA provider/profile",
+        help="Install or update the Codex AgentBridge provider/profile",
     )
     install_parser.add_argument(
         "--codex-home",
@@ -398,7 +398,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     codex_parser = subparsers.add_parser(
         "codex",
-        help="Run Codex through the MOMA profile",
+        help="Run Codex through the AgentBridge profile",
     )
     codex_parser.add_argument("--profile", default=DEFAULT_PROFILE)
     codex_parser.add_argument("--env-key", default=DEFAULT_ENV_KEY)
@@ -415,8 +415,10 @@ def main(argv: list[str] | None = None) -> int:
         if not argv or argv[0] not in {"-h", "--help"}:
             argv = ["start", *argv]
 
-    # Preserve the original CLI shape: `moma-proxy --config config.yaml`.
-    if not argv or argv[0].startswith("-"):
+    # Preserve the direct server CLI shape for legacy entry points and python -m.
+    if (not argv or argv[0].startswith("-")) and not (
+        called_as == "agent-bridge" and argv and argv[0] in {"-h", "--help"}
+    ):
         legacy_parser = argparse.ArgumentParser(
             description="AgentBridge - local gateway for Codex/Claude Code model providers"
         )
@@ -437,7 +439,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "install-codex":
         return _install_codex_from_args(args)
     if args.command == "codex":
-        return run_codex_with_moma(
+        return run_codex_with_agent_bridge(
             profile=args.profile,
             env_key=args.env_key,
             api_key=args.api_key,

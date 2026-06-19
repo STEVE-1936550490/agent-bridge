@@ -2,7 +2,7 @@
 
 import pytest
 
-from moma_proxy.parsers.glm import ContentType, GLMParser, GLMStreamChunk
+from agent_bridge.parsers.glm import ContentType, GLMParser, GLMStreamChunk
 
 
 def test_parse_empty_line():

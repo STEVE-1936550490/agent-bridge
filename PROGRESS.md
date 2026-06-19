@@ -12,19 +12,19 @@
 - 一条命令完成代理启动、健康检查、目标客户端启动。
 - 实时监控代理状态，出现问题时输出可定位、可复盘的日志。
 - 提供本地 UI 看板，查看每条请求日志、状态、错误和 token 用量。
-- 对外产品名和主 CLI 先收敛为 `AgentBridge` / `agent-bridge`；Python 包名 `moma_proxy` 暂时保留，最终阶段再统一清理。
+- 对外产品名、主 CLI 和 Python 包名已收敛为 `AgentBridge` / `agent-bridge` / `agent_bridge`；旧 `moma_proxy`、`moma-proxy`、`moma` 仅作为迁移兼容入口保留。
 
 ## 当前状态
 
 - Codex 是第一优先级客户端。
-- 当前可用链路是 `Codex /v1/responses -> moma_proxy -> MOMA /v1/chat/completions`。
+- 当前可用链路是 `Codex /v1/responses -> AgentBridge -> OpenAI Chat Completions provider`。
 - 已具备 Responses API 文本流基础能力。
 - 已支持 OpenAI 标准 `delta.tool_calls` 解析和 Responses API function call 事件输出。
 - 已验证 MOMA 上游使用标准 OpenAI `tool_calls` 格式，不需要额外 tool call parser 分支。
 - `agent-bridge run` 一键启动、监控日志、UI 看板和 Claude Code/Anthropic 基础协议支持已完成。
 - 阶段 2 已提供跨平台安装入口；Claude Code CLI 检测/安装与基础 Anthropic Messages 兼容路径已具备。
 - 阶段 3 已提供 provider/protocol 配置抽象；当前放行已实现的 `codex_responses -> openai_chat` 和 `anthropic -> openai_chat`。
-- 阶段 3.5 已提前完成对外命名收敛：主 CLI 为 `agent-bridge`，兼容保留 `moma-proxy` 和 `moma`。
+- 阶段 8 已完成主要命名收敛：主 CLI 为 `agent-bridge`，主 Python 包为 `agent_bridge`，兼容保留 `moma-proxy`、`moma_proxy` 和 `moma`。
 
 ## 阶段 0：文档与边界收敛
 
@@ -151,8 +151,8 @@ agent-bridge run -p openai-compatible --base-url http://127.0.0.1:8000/v1 --mode
 - 对外产品名使用 `AgentBridge`。
 - 新增主 CLI：`agent-bridge`。
 - 保留兼容 CLI：`moma-proxy`。
-- 保留 `moma` 作为“用 MOMA profile 启动 Codex”的快捷命令。
-- 暂不修改 Python 包名 `moma_proxy`、内部 import 和历史兼容配置。
+- 保留 `moma` 作为旧快捷命令，但它应启动新的 `agent_bridge` Codex profile。
+- 阶段 8 已将 Python 主包迁移到 `agent_bridge`，本阶段仅保留 `moma_proxy` 兼容 wrapper。
 
 验收：
 
@@ -175,7 +175,7 @@ agent-bridge run -p openai-compatible --base-url http://127.0.0.1:8000/v1 --mode
 - 等待 `/health` 成功后再启动 Codex 或后续 Claude Code。
 - 同一终端输出代理启动状态、端口冲突、配置错误和上游认证错误。
 - 客户端退出后清理代理子进程。
-- 保留 `python -m moma_proxy --config config.yaml` 作为调试入口。
+- 保留 `python -m agent_bridge --config config.yaml` 作为调试入口；`python -m moma_proxy` 仅作为兼容入口。
 
 验收：
 
@@ -278,13 +278,13 @@ agent-bridge run -p openai-compatible --base-url http://127.0.0.1:8000/v1 --mode
 
 ## 当前验收快照
 
-状态：已完成阶段 4、5、6、7，并追加完成交互式配置入口、dashboard/API 日志收敛和 `run` 启动降噪；按要求停在阶段 8 之前，尚未执行 thorough code review 和内部包名清理。
+状态：已完成阶段 4、5、6、7、7.5，并完成阶段 8 主体命名收敛；深度死代码清理后续按风险分批做。
 
 已验证：
 
 - 触达文件格式检查：`black --check --no-cache --workers 1 ...` 输出已格式化；当前环境下 black 偶发需要 `timeout` 才结束。
 - import 排序检查：`isort --check-only ...` 通过。
-- 全量测试：`57 passed, 10 skipped`。
+- 全量测试：`61 passed, 10 skipped`。
 
 ## 阶段 7.5：配置体验与启动命令简化
 
@@ -300,11 +300,11 @@ agent-bridge run -p openai-compatible --base-url http://127.0.0.1:8000/v1 --mode
 - README 已补充交互式配置、命令行配置和手动 YAML 配置三种方式。
 - 修复 dashboard 刷新 `/logs` 导致看板和终端日志刷屏的问题；dashboard 现在只展示 `/v1/...` API 请求日志。
 - `agent-bridge run` 启动的代理子进程不再把代理日志混进 Codex/Claude 终端；代理启动失败时才输出代理日志尾部。
-- 已修复本机 Codex profile 指向旧 `8080` 和旧 provider 名的问题，当前 `moma` profile 指向 `moma_proxy` / `http://127.0.0.1:17681/v1`。
+- 已修复本机 Codex profile 指向旧 `8080` 和旧 provider 名的问题，当前 `agent_bridge` profile 指向 `agent_bridge` / `http://127.0.0.1:17681/v1`。
 - 已端到端验证：`agent-bridge run --config config.yaml -p moma --client codex exec "只输出 OK"` 成功返回 `OK`。
 - 新增短命令：`agent-bridge` 和 `agent-bridge start` 默认读取 `config.yaml`、使用 `active_provider`、默认启动 Codex。
 - 保留 `agent-bridge run ...` 作为完整显式入口，适合指定 provider、client 和透传客户端参数。
-- `agent-bridge configure` 默认同步 Codex `moma` profile 的本地代理 base URL 和模型，避免配置与 profile 漂移；可用 `--skip-codex-profile` 跳过。
+- `agent-bridge configure` 默认同步 Codex `agent_bridge` profile 的本地代理 base URL 和模型，避免配置与 profile 漂移；可用 `--skip-codex-profile` 跳过。
 - 已覆盖短命令启动、`configure` 同步 Codex profile、跳过同步等测试。
 
 后续验证：
@@ -312,6 +312,8 @@ agent-bridge run -p openai-compatible --base-url http://127.0.0.1:8000/v1 --mode
 - 给 Claude Code 路径补同等的一键启动实际验收。
 
 ## 阶段 8：彻底命名与代码清理
+
+状态：已完成主体命名收敛（2026-06-19）；深度死代码清理后续按风险分批做。
 
 触发条件：
 
@@ -322,9 +324,12 @@ agent-bridge run -p openai-compatible --base-url http://127.0.0.1:8000/v1 --mode
 
 工作内容：
 
-- 做一次 thorough code review，重点审查命名、边界、无用分支、重复入口和历史兼容包袱。
-- 决定是否把 Python 包名从 `moma_proxy` 迁移到 `agent_bridge`。
-- 清理无用文件、过时代码分支、旧文档残留和不再需要的兼容逻辑。
+- 已完成 README 主线重写：命名、安装、配置、启动、兼容矩阵和排障按 AgentBridge-first 组织。
+- 已将 Python 主包从 `moma_proxy` 迁移到 `agent_bridge`，旧包名作为兼容 wrapper 保留。
+- 已将 Python distribution 名从 `moma-proxy` 迁移到 `agent-bridge`，保留 `moma-proxy` CLI 兼容入口。
+- 已将 Codex 默认 provider/profile 收敛为 `agent_bridge`，`moma` 命令仅作为旧快捷 wrapper。
+- 已更新 AGENTS/CLAUDE/config 模板和测试导入，默认使用 `agent_bridge`。
+- 已验证真实 editable 安装后 `agent-bridge --help` 显示主 CLI 子命令，`moma-proxy --help` 保留旧直启兼容。
 - 保留必要迁移说明，避免破坏已有用户配置。
 
 ## 执行原则

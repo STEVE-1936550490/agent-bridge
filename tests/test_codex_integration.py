@@ -6,14 +6,14 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-from moma_proxy.codex import (
+from agent_bridge.codex import (
     DEFAULT_BASE_URL,
     CodexInstallConfig,
     install_codex_profile,
     render_codex_config,
-    run_codex_with_moma,
+    run_codex_with_agent_bridge,
 )
-from moma_proxy.main import main
+from agent_bridge.main import main
 
 
 def test_default_codex_base_url_uses_agentbridge_port() -> None:
@@ -21,7 +21,7 @@ def test_default_codex_base_url_uses_agentbridge_port() -> None:
 
 
 def test_render_codex_config_preserves_default_model() -> None:
-    """Installing the MOMA provider must not change the default Codex model."""
+    """Installing the AgentBridge provider must not change the default Codex model."""
     existing = """
 model = "gpt-5.5"
 model_provider = "openai"
@@ -31,7 +31,7 @@ name = "OpenAI"
 """.strip()
     config = CodexInstallConfig(
         codex_home=Path("/tmp/codex"),
-        provider="moma_proxy",
+        provider="agent_bridge",
         base_url="http://127.0.0.1:17681/v1",
     )
 
@@ -40,7 +40,7 @@ name = "OpenAI"
     assert 'model = "gpt-5.5"' in rendered
     assert 'model_provider = "openai"' in rendered
     assert "[model_providers.openai]" in rendered
-    assert "[model_providers.moma_proxy]" in rendered
+    assert "[model_providers.agent_bridge]" in rendered
     assert 'wire_api = "responses"' in rendered
 
 
@@ -49,7 +49,7 @@ def test_render_codex_config_replaces_existing_provider() -> None:
     existing = """
 model = "gpt-5.5"
 
-[model_providers.moma_proxy]
+[model_providers.agent_bridge]
 name = "Old"
 base_url = "http://old.example/v1"
 
@@ -58,13 +58,13 @@ name = "Other"
 """.strip()
     config = CodexInstallConfig(
         codex_home=Path("/tmp/codex"),
-        provider="moma_proxy",
+        provider="agent_bridge",
         base_url="http://127.0.0.1:9000/v1",
     )
 
     rendered = render_codex_config(existing, config)
 
-    assert rendered.count("[model_providers.moma_proxy]") == 1
+    assert rendered.count("[model_providers.agent_bridge]") == 1
     assert "http://old.example/v1" not in rendered
     assert 'base_url = "http://127.0.0.1:9000/v1"' in rendered
     assert "[model_providers.other]" in rendered
@@ -78,8 +78,8 @@ def test_install_codex_profile_writes_config_and_profile(tmp_path: Path) -> None
     config_path, profile_path = install_codex_profile(config)
 
     assert config_path == tmp_path / "config.toml"
-    assert profile_path == tmp_path / "moma.config.toml"
-    assert "[model_providers.moma_proxy]" in config_path.read_text(encoding="utf-8")
+    assert profile_path == tmp_path / "agent_bridge.config.toml"
+    assert "[model_providers.agent_bridge]" in config_path.read_text(encoding="utf-8")
     assert 'model = "ZHIPU/GLM-5.1"' in profile_path.read_text(encoding="utf-8")
 
 
@@ -89,7 +89,7 @@ def test_main_install_codex_uses_codex_home(tmp_path: Path) -> None:
 
     assert result == 0
     assert (tmp_path / "config.toml").exists()
-    assert (tmp_path / "moma.config.toml").exists()
+    assert (tmp_path / "agent_bridge.config.toml").exists()
 
 
 def test_main_serve_rejects_unsupported_protocol_pair(tmp_path: Path) -> None:
@@ -120,7 +120,7 @@ upstream:
 
 
 def test_python_module_entrypoint_propagates_exit_code(tmp_path: Path) -> None:
-    """python -m moma_proxy should return the main() exit code."""
+    """python -m agent_bridge should return the main() exit code."""
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
         """
@@ -135,7 +135,7 @@ upstream:
         [
             sys.executable,
             "-m",
-            "moma_proxy",
+            "agent_bridge",
             "serve",
             "--config",
             str(config_path),
@@ -153,8 +153,8 @@ upstream:
     assert "Unsupported protocol combination" in completed.stderr
 
 
-def test_run_codex_with_moma_injects_env_key() -> None:
-    """The MOMA launcher sets Codex's required client-side API key."""
+def test_run_codex_with_agent_bridge_injects_env_key() -> None:
+    """The compatibility launcher sets Codex's required client-side API key."""
     captured = {}
 
     def fake_run(command, env, check):
@@ -168,10 +168,10 @@ def test_run_codex_with_moma_injects_env_key() -> None:
         return Completed()
 
     with patch.dict(os.environ, {}, clear=True):
-        with patch("moma_proxy.codex.subprocess.run", fake_run):
-            result = run_codex_with_moma(argv=["exec", "hello"])
+        with patch("agent_bridge.codex.subprocess.run", fake_run):
+            result = run_codex_with_agent_bridge(argv=["exec", "hello"])
 
     assert result == 0
-    assert captured["command"] == ["codex", "-p", "moma", "exec", "hello"]
-    assert captured["env"]["MOMA_PROXY_API_KEY"] == "dummy"
+    assert captured["command"] == ["codex", "-p", "agent_bridge", "exec", "hello"]
+    assert captured["env"]["AGENT_BRIDGE_API_KEY"] == "dummy"
     assert captured["check"] is False

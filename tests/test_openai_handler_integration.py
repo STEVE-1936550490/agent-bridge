@@ -6,8 +6,8 @@ import aiohttp
 import pytest
 from aiohttp import web
 
-from moma_proxy.config import Config, ServerConfig, UpstreamConfig
-from moma_proxy.server import ProxyServer
+from agent_bridge.config import Config, ServerConfig, UpstreamConfig
+from agent_bridge.server import ProxyServer
 
 
 async def _start_app(app: web.Application) -> tuple[web.AppRunner, str]:
@@ -246,7 +246,7 @@ async def test_responses_stream_bridges_function_tools() -> None:
                         {
                             "type": "function_call_output",
                             "call_id": "call_prev",
-                            "output": "/root/moma_proxy",
+                            "output": "/root/agent_bridge",
                         },
                     ],
                     "tools": [
@@ -286,7 +286,7 @@ async def test_responses_stream_bridges_function_tools() -> None:
         assert seen_payloads[0]["messages"][1] == {
             "role": "tool",
             "tool_call_id": "call_prev",
-            "content": "/root/moma_proxy",
+            "content": "/root/agent_bridge",
         }
         assert "response.function_call_arguments.delta" in text
         assert "response.function_call_arguments.done" in text
@@ -476,7 +476,7 @@ async def test_anthropic_messages_bridges_tools() -> None:
                                 {
                                     "type": "tool_result",
                                     "tool_use_id": "call_prev",
-                                    "content": "/root/moma_proxy",
+                                    "content": "/root/agent_bridge",
                                 },
                                 {"type": "text", "text": "run pwd"},
                             ],
@@ -502,7 +502,7 @@ async def test_anthropic_messages_bridges_tools() -> None:
         assert seen_payloads[0]["messages"][0] == {
             "role": "tool",
             "tool_call_id": "call_prev",
-            "content": "/root/moma_proxy",
+            "content": "/root/agent_bridge",
         }
         assert '"type": "tool_use"' in text
         assert "input_json_delta" in text

@@ -4,7 +4,7 @@ import importlib
 
 from aiohttp import web
 
-import moma_proxy.observability as observability
+import agent_bridge.observability as observability
 
 
 def test_observability_falls_back_when_request_key_is_unavailable(monkeypatch) -> None:

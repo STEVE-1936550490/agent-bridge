@@ -3,14 +3,14 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from moma_proxy.codex import CodexInstallConfig
-from moma_proxy.installer import (
+from agent_bridge.codex import CodexInstallConfig
+from agent_bridge.installer import (
     ToolStatus,
     ensure_config_file,
     format_install_summary,
     run_local_install,
 )
-from moma_proxy.main import main
+from agent_bridge.main import main
 
 
 def test_ensure_config_file_creates_from_template(tmp_path: Path) -> None:
@@ -57,7 +57,7 @@ def test_main_install_creates_config_and_codex_profile(tmp_path: Path) -> None:
     assert result == 0
     assert config.exists()
     assert (codex_home / "config.toml").exists()
-    assert (codex_home / "moma.config.toml").exists()
+    assert (codex_home / "agent_bridge.config.toml").exists()
 
 
 def test_run_local_install_can_install_codex_cli_with_npm(tmp_path: Path) -> None:
@@ -72,8 +72,8 @@ def test_run_local_install_can_install_codex_cli_with_npm(tmp_path: Path) -> Non
     class Completed:
         returncode = 0
 
-    with patch("moma_proxy.installer.shutil.which", fake_which):
-        with patch("moma_proxy.installer.subprocess.run", return_value=Completed()) as run:
+    with patch("agent_bridge.installer.shutil.which", fake_which):
+        with patch("agent_bridge.installer.subprocess.run", return_value=Completed()) as run:
             summary = run_local_install(
                 config_path=config,
                 template_path=template,
@@ -107,8 +107,8 @@ def test_run_local_install_can_install_claude_code_with_npm(tmp_path: Path) -> N
     class Completed:
         returncode = 0
 
-    with patch("moma_proxy.installer.shutil.which", fake_which):
-        with patch("moma_proxy.installer.subprocess.run", return_value=Completed()) as run:
+    with patch("agent_bridge.installer.shutil.which", fake_which):
+        with patch("agent_bridge.installer.subprocess.run", return_value=Completed()) as run:
             summary = run_local_install(
                 config_path=config,
                 template_path=template,
@@ -137,7 +137,7 @@ def test_format_install_summary_reports_missing_codex_and_claude(tmp_path: Path)
     codex_home = tmp_path / "codex"
     template.write_text("upstream:\n  api_key: ${MOMA_API_KEY}\n", encoding="utf-8")
 
-    with patch("moma_proxy.installer.detect_tools") as detect:
+    with patch("agent_bridge.installer.detect_tools") as detect:
         detect.return_value = [
             ToolStatus("Node.js", "node", "/usr/bin/node"),
             ToolStatus("npm", "npm", "/usr/bin/npm"),

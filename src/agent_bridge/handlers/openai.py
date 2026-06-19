@@ -70,7 +70,7 @@ class OpenAIHandler:
             {
                 "error": {
                     "message": message,
-                    "type": "moma_proxy_error",
+                    "type": "agent_bridge_error",
                     "code": status,
                 }
             },

@@ -12,7 +12,7 @@ import yaml
 
 from .config import ClientProtocol, ProviderApi
 
-DEFAULT_PROVIDER_NAME = "moma"
+DEFAULT_PROVIDER_NAME = "moma_glm51"
 DEFAULT_BASE_URL = "https://moma.cmecloud.cn/v1"
 DEFAULT_API_KEY_ENV = "MOMA_API_KEY"
 DEFAULT_MODEL = "ZHIPU/GLM-5.1"

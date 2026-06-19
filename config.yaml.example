@@ -1,4 +1,4 @@
-# MOMA Proxy Configuration
+# AgentBridge Configuration
 # Copy this file to config.yaml and fill in your values:
 #   cp config.yaml.example config.yaml
 
@@ -10,13 +10,12 @@ upstream:
   # Or set directly (NOT recommended for git-tracked files):
   # api_key: "your-api-key-here"
 
-# New provider-aware configuration. The legacy `upstream` block above remains
-# supported; providers make `-p <platform>` selection possible.
-active_provider: "moma"
+# Provider-aware configuration. Use provider names like `<platform>_<model>`.
+active_provider: "moma_glm51"
 default_model: "ZHIPU/GLM-5.1"
 
 providers:
-  moma:
+  moma_glm51:
     base_url: "https://moma.cmecloud.cn/v1"
     api_key_env: "MOMA_API_KEY"
     model: "ZHIPU/GLM-5.1"
@@ -27,7 +26,7 @@ server:
   host: "0.0.0.0"
   port: 17681
 
-mode: "codex"  # "codex" or "anthropic" (anthropic not yet implemented)
+mode: "codex"  # legacy compatibility field: "codex" or "anthropic"
 
 logging:
   level: "INFO"

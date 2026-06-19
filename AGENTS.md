@@ -56,9 +56,10 @@ on Windows and Linux.
      token counts in a separate field so real and estimated values are not
      confused.
 
-7. Rename after the above foundation is usable.
+7. Naming is now AgentBridge-first.
    - Use `AgentBridge` as the public product and CLI name now.
-   - Keep the Python package name `moma_proxy` until the final naming/code review pass.
+   - Use `agent_bridge` as the Python package name.
+   - Keep `moma_proxy`, `moma-proxy`, and `moma` only as migration compatibility shims.
 
 ## Engineering Priorities
 
@@ -75,7 +76,7 @@ on Windows and Linux.
 ```bash
 pip install -e ".[dev]"
 pytest tests -v
-python -m moma_proxy --config config.yaml
+python -m agent_bridge --config config.yaml
 ```
 
 ## Current Compatibility Baseline

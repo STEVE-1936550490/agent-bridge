@@ -1,4 +1,4 @@
-"""Codex integration helpers for MOMA proxy."""
+"""Codex integration helpers for AgentBridge."""
 
 from __future__ import annotations
 
@@ -8,16 +8,16 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_PROFILE = "moma"
-DEFAULT_PROVIDER = "moma_proxy"
+DEFAULT_PROFILE = "agent_bridge"
+DEFAULT_PROVIDER = "agent_bridge"
 DEFAULT_MODEL = "ZHIPU/GLM-5.1"
 DEFAULT_BASE_URL = "http://127.0.0.1:17681/v1"
-DEFAULT_ENV_KEY = "MOMA_PROXY_API_KEY"
+DEFAULT_ENV_KEY = "AGENT_BRIDGE_API_KEY"
 
 
 @dataclass(frozen=True)
 class CodexInstallConfig:
-    """Configuration for installing the Codex MOMA profile."""
+    """Configuration for installing the Codex AgentBridge profile."""
 
     codex_home: Path
     profile: str = DEFAULT_PROFILE
@@ -70,7 +70,7 @@ def _provider_block(config: CodexInstallConfig) -> str:
     return "\n".join(
         [
             f"[model_providers.{config.provider}]",
-            'name = "MOMA Proxy"',
+            'name = "AgentBridge"',
             f"base_url = {_toml_quote(config.base_url)}",
             f"env_key = {_toml_quote(config.env_key)}",
             'wire_api = "responses"',
@@ -89,7 +89,7 @@ def _profile_content(config: CodexInstallConfig) -> str:
 
 
 def render_codex_config(existing_content: str, config: CodexInstallConfig) -> str:
-    """Render config.toml with the managed MOMA provider table."""
+    """Render config.toml with the managed AgentBridge provider table."""
     table_name = f"model_providers.{config.provider}"
     preserved = _remove_toml_table(existing_content, table_name)
     provider_block = _provider_block(config)
@@ -113,13 +113,13 @@ def install_codex_profile(config: CodexInstallConfig) -> tuple[Path, Path]:
     return config.config_path, config.profile_path
 
 
-def run_codex_with_moma(
+def run_codex_with_agent_bridge(
     profile: str = DEFAULT_PROFILE,
     env_key: str = DEFAULT_ENV_KEY,
     api_key: str = "dummy",
     argv: list[str] | None = None,
 ) -> int:
-    """Run Codex with the MOMA profile and required client-side API key."""
+    """Run Codex with the AgentBridge profile and required client-side API key."""
     command = ["codex", "-p", profile]
     if argv:
         command.extend(argv)
@@ -133,3 +133,18 @@ def run_codex_with_moma(
         print("Error: codex command not found in PATH", file=sys.stderr)
         return 127
     return completed.returncode
+
+
+def run_codex_with_moma(
+    profile: str = DEFAULT_PROFILE,
+    env_key: str = DEFAULT_ENV_KEY,
+    api_key: str = "dummy",
+    argv: list[str] | None = None,
+) -> int:
+    """Backward-compatible alias for the old function name."""
+    return run_codex_with_agent_bridge(
+        profile=profile,
+        env_key=env_key,
+        api_key=api_key,
+        argv=argv,
+    )

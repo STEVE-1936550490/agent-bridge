@@ -2,10 +2,10 @@
 
 import pytest
 
-from moma_proxy.parsers.glm import ContentType, GLMStreamChunk
-from moma_proxy.transformers.anthropic import AnthropicTransformer
-from moma_proxy.transformers.codex import CodexTransformer
-from moma_proxy.transformers.responses import ResponsesTransformer
+from agent_bridge.parsers.glm import ContentType, GLMStreamChunk
+from agent_bridge.transformers.anthropic import AnthropicTransformer
+from agent_bridge.transformers.codex import CodexTransformer
+from agent_bridge.transformers.responses import ResponsesTransformer
 
 
 def test_format_chunk():

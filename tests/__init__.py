@@ -1,6 +1,6 @@
 """Test package initialization."""
 
-from moma_proxy import __version__
+from agent_bridge import __version__
 
 
 def test_version():

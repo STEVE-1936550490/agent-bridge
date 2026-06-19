@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "moma-proxy"
+name = "agent-bridge"
 version = "0.1.0"
 description = "AgentBridge gateway for Codex/Claude Code compatible model providers"
 readme = "README.md"
@@ -26,9 +26,9 @@ dev = [
 ]
 
 [project.scripts]
-agent-bridge = "moma_proxy.main:main"
-moma-proxy = "moma_proxy.main:main"
-moma = "moma_proxy.codex_cli:main"
+agent-bridge = "agent_bridge.main:main"
+moma-proxy = "agent_bridge.main:main"
+moma = "agent_bridge.codex_cli:main"
 
 [tool.black]
 line-length = 100

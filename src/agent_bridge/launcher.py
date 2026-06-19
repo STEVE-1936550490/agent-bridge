@@ -60,7 +60,7 @@ def build_proxy_command(config: RunConfig) -> list[str]:
     command = [
         sys.executable,
         "-m",
-        "moma_proxy",
+        "agent_bridge",
         "serve",
         "--config",
         str(config.config_path),
