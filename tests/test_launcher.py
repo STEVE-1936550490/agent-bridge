@@ -311,6 +311,7 @@ def test_sync_codex_profile_model_updates_profile_when_provider_changes(tmp_path
 
     # Monkey-patch default_codex_home to use our temp dir
     import agent_bridge.launcher as launcher_mod
+
     original_codex_home = launcher_mod.default_codex_home
     launcher_mod.default_codex_home = lambda: codex_home
     try:
@@ -358,6 +359,7 @@ def test_sync_codex_profile_model_skips_when_model_matches(tmp_path: Path) -> No
 
     # Record mtime before sync
     import time
+
     mtime_before = install_config.profile_path.stat().st_mtime
     time.sleep(0.05)
 
@@ -371,6 +373,7 @@ def test_sync_codex_profile_model_skips_when_model_matches(tmp_path: Path) -> No
     )
 
     import agent_bridge.launcher as launcher_mod
+
     original_codex_home = launcher_mod.default_codex_home
     launcher_mod.default_codex_home = lambda: codex_home
     try:

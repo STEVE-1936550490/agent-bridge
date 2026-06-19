@@ -6,6 +6,7 @@ import json
 import uuid
 from typing import AsyncIterator
 
+from ..observability import TokenUsage
 from ..parsers.glm import ContentType, GLMStreamChunk
 
 
@@ -18,6 +19,7 @@ class AnthropicTransformer:
         self.text_started = False
         self.text_index = 0
         self.tool_states: dict[int, dict] = {}
+        self.usage = TokenUsage()
 
     def _event(self, event: str, data: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(data)}\n\n"
@@ -108,7 +110,7 @@ class AnthropicTransformer:
         data = {
             "type": "message_delta",
             "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-            "usage": {"output_tokens": 0},
+            "usage": {"output_tokens": self.usage.output_tokens or 0},
         }
         return self._event("message_delta", data)
 
@@ -124,6 +126,9 @@ class AnthropicTransformer:
         yield self.format_message_start()
 
         async for chunk in chunks:
+            if chunk.usage:
+                self.usage = TokenUsage.from_usage_dict(chunk.usage)
+
             if chunk.content_type == ContentType.DONE:
                 if self.text_started:
                     yield self.format_content_block_stop(self.text_index)
@@ -156,8 +161,14 @@ class AnthropicTransformer:
                     yield self.format_text_start()
                 yield self.format_text_delta(chunk.content)
 
-    def build_message_json(self, content: str, stop_reason: str = "end_turn") -> dict:
+    def build_message_json(
+        self,
+        content: str,
+        stop_reason: str = "end_turn",
+        usage: TokenUsage | None = None,
+    ) -> dict:
         """Build a non-streaming Anthropic message response."""
+        token_usage = usage if usage is not None else self.usage
         return {
             "id": self.message_id,
             "type": "message",
@@ -166,5 +177,8 @@ class AnthropicTransformer:
             "content": [{"type": "text", "text": content}],
             "stop_reason": stop_reason,
             "stop_sequence": None,
-            "usage": {"input_tokens": 0, "output_tokens": 0},
+            "usage": {
+                "input_tokens": token_usage.input_tokens or 0,
+                "output_tokens": token_usage.output_tokens or 0,
+            },
         }

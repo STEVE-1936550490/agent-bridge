@@ -6,6 +6,7 @@ import time
 import uuid
 from typing import AsyncIterator
 
+from ..observability import TokenUsage
 from ..parsers.glm import ContentType, GLMStreamChunk
 
 logger = logging.getLogger(__name__)
@@ -21,11 +22,12 @@ class CodexTransformer:
            "index":0,"delta":{"content":"Hello"},"finish_reason":null}]}
     """
 
-    def __init__(self, model: str = "glm-5.1"):
+    def __init__(self, model: str = "ZHIPU/GLM-5.1"):
         self.model = model
         self.completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
         self.created = int(time.time())
         self.role_sent = False
+        self.usage = TokenUsage()
 
     def format_role_chunk(self) -> str:
         """Format the initial assistant role chunk."""
@@ -92,6 +94,9 @@ class CodexTransformer:
             yield self.format_role_chunk()
 
         async for chunk in chunks:
+            if chunk.usage:
+                self.usage = TokenUsage.from_usage_dict(chunk.usage)
+
             if chunk.content_type == ContentType.DONE:
                 # GLM's last content chunk already has finish_reason
                 # Just output [DONE] marker
@@ -113,7 +118,7 @@ class CodexTransformer:
 class CodexResponseBuilder:
     """Build non-streaming Codex responses."""
 
-    def __init__(self, model: str = "glm-5.1"):
+    def __init__(self, model: str = "ZHIPU/GLM-5.1"):
         self.model = model
 
     def build_response(
@@ -122,6 +127,7 @@ class CodexResponseBuilder:
         reasoning: str | None = None,
         prompt_tokens: int = 0,
         completion_tokens: int = 0,
+        usage: TokenUsage | None = None,
     ) -> dict:
         """
         Build a non-streaming OpenAI-compatible response.
@@ -131,6 +137,7 @@ class CodexResponseBuilder:
             reasoning: Optional reasoning content (currently not included in Codex format)
             prompt_tokens: Number of prompt tokens
             completion_tokens: Number of completion tokens
+            usage: Upstream token usage; takes precedence over the explicit counts
 
         Returns:
             OpenAI-format response dict
@@ -151,8 +158,10 @@ class CodexResponseBuilder:
                 }
             ],
             "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens + completion_tokens,
+                "prompt_tokens": usage.input_tokens if usage else prompt_tokens,
+                "completion_tokens": usage.output_tokens if usage else completion_tokens,
+                "total_tokens": (
+                    usage.total_tokens if usage else prompt_tokens + completion_tokens
+                ),
             },
         }

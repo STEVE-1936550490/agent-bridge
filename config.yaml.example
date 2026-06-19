@@ -21,6 +21,7 @@ providers:
     model: "ZHIPU/GLM-5.1"
     provider_api: "openai_chat"       # openai_chat | openai_responses | anthropic_messages
     client_protocol: "codex_responses" # codex_responses | anthropic
+    reasoning_mode: "thinking"        # passthrough | thinking | none (GLM 只支持开/关思考)
 
 server:
   host: "0.0.0.0"

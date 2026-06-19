@@ -44,6 +44,52 @@ class TokenUsage:
     output_tokens: int | None = None
     total_tokens: int | None = None
 
+    @staticmethod
+    def from_usage_dict(usage: object) -> "TokenUsage":
+        """Build a TokenUsage from an upstream usage payload.
+
+        Tolerates several field naming conventions used by OpenAI-compatible
+        providers (``prompt_tokens``/``completion_tokens``) and Anthropic-style
+        providers (``input_tokens``/``output_tokens``). Missing or non-integer
+        fields yield ``None`` rather than raising, so providers that do not
+        report usage stay ``unavailable`` instead of breaking the request.
+        """
+        if not isinstance(usage, dict):
+            return TokenUsage()
+
+        def _to_int(value: object) -> int | None:
+            if isinstance(value, bool):
+                return None
+            if isinstance(value, int):
+                return value
+            if isinstance(value, float) and value.is_integer():
+                return int(value)
+            if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+                return int(value)
+            return None
+
+        input_tokens = _to_int(
+            usage.get("input_tokens")
+            if usage.get("input_tokens") is not None
+            else usage.get("prompt_tokens")
+        )
+        output_tokens = _to_int(
+            usage.get("output_tokens")
+            if usage.get("output_tokens") is not None
+            else usage.get("completion_tokens")
+        )
+        total_tokens = _to_int(usage.get("total_tokens"))
+
+        if input_tokens is None and output_tokens is None and total_tokens is None:
+            return TokenUsage()
+
+        return TokenUsage(
+            source="upstream",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=total_tokens,
+        )
+
 
 @dataclass(frozen=True)
 class RequestLog:

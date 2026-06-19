@@ -9,7 +9,14 @@ from typing import TYPE_CHECKING
 from aiohttp import web
 
 from ..config import Config
-from ..observability import REQ_CLIENT_PROTOCOL, REQ_MODEL, REQ_PROVIDER_PROTOCOL, REQ_STREAM_STATE
+from ..observability import (
+    REQ_CLIENT_PROTOCOL,
+    REQ_MODEL,
+    REQ_PROVIDER_PROTOCOL,
+    REQ_STREAM_STATE,
+    REQ_TOKEN_USAGE,
+    TokenUsage,
+)
 from ..parsers.glm import ContentType, GLMParser
 from ..transformers.anthropic import AnthropicTransformer
 from ..transformers.codex import CodexResponseBuilder, CodexTransformer
@@ -36,6 +43,12 @@ class OpenAIHandler:
         self.config = config
         self.upstream_url = config.upstream.base_url.rstrip("/")
         self.api_key = config.upstream.api_key
+        # Resolve the active provider's reasoning mode so per-request handlers
+        # know how to translate Codex reasoning effort into upstream fields.
+        try:
+            self.reasoning_mode = config.get_provider().reasoning_mode
+        except ValueError:
+            self.reasoning_mode = "passthrough"
 
     def _prepare_upstream_request(
         self, client_request: web.Request, body: dict
@@ -61,8 +74,48 @@ class OpenAIHandler:
         # GLM must stream to separate reasoning from content
         payload = {key: value for key, value in body.items() if value is not None}
         payload["stream"] = True
+        # Ask OpenAI-compatible providers to emit token usage on the final
+        # streaming chunk. Providers that ignore this field are unaffected.
+        payload.setdefault("stream_options", {})["include_usage"] = True
 
         return url, headers, payload
+
+    @staticmethod
+    def _extract_reasoning_effort(body: dict) -> str | None:
+        """Extract the reasoning effort the client requested, if any.
+
+        Codex sends ``reasoning: {"effort": "..."}`` in Responses API requests.
+        Chat Completions clients may send a top-level ``reasoning_effort``.
+        """
+        reasoning = body.get("reasoning")
+        if isinstance(reasoning, dict):
+            effort = reasoning.get("effort")
+            if isinstance(effort, str):
+                return effort
+        effort = body.get("reasoning_effort")
+        if isinstance(effort, str):
+            return effort
+        return None
+
+    def _apply_reasoning_to_chat_body(self, chat_body: dict, effort: str | None) -> None:
+        """Translate a client reasoning effort into upstream fields.
+
+        - ``passthrough``: forward ``reasoning_effort`` as-is (OpenAI standard).
+        - ``thinking``: map low efforts to ``thinking: disabled`` and high
+          efforts to ``thinking: enabled`` (GLM / Zhipu convention).
+        - ``none``: do not add any reasoning field.
+        """
+        if effort is None:
+            return
+        if self.reasoning_mode == "none":
+            return
+        if self.reasoning_mode == "thinking":
+            # GLM only supports an on/off switch, not a graded effort.
+            thinking_type = "disabled" if effort in {"minimal", "low"} else "enabled"
+            chat_body["thinking"] = {"type": thinking_type}
+            return
+        # passthrough: forward the standard OpenAI field.
+        chat_body["reasoning_effort"] = effort
 
     def _error_response(self, message: str, status: int) -> web.Response:
         """Return an OpenAI-shaped error response."""
@@ -93,13 +146,16 @@ class OpenAIHandler:
         self,
         chunks,
         include_reasoning: bool = False,
-    ) -> tuple[str, str | None]:
-        """Collect parsed GLM chunks into content and finish reason."""
+    ) -> tuple[str, str | None, TokenUsage]:
+        """Collect parsed GLM chunks into content, finish reason and usage."""
         content_parts: list[str] = []
         finish_reason: str | None = None
+        usage = TokenUsage()
 
         async for chunk in chunks:
             if chunk.content_type == ContentType.DONE:
+                if chunk.usage:
+                    usage = TokenUsage.from_usage_dict(chunk.usage)
                 finish_reason = chunk.finish_reason or finish_reason or "stop"
                 break
 
@@ -110,13 +166,22 @@ class OpenAIHandler:
                 content_parts.append(chunk.content)
             if chunk.finish_reason:
                 finish_reason = chunk.finish_reason
+            if chunk.usage:
+                usage = TokenUsage.from_usage_dict(chunk.usage)
 
-        return "".join(content_parts), finish_reason or "stop"
+        return "".join(content_parts), finish_reason or "stop", usage
 
-    def _build_responses_json(self, model: str, content: str) -> dict:
+    def _build_responses_json(
+        self, model: str, content: str, usage: TokenUsage | None = None
+    ) -> dict:
         """Build a non-streaming Responses API response."""
         transformer = ResponsesTransformer(model=model)
         completed_at = transformer.created_at
+        usage_dict = {
+            "input_tokens": usage.input_tokens if usage else 0,
+            "output_tokens": usage.output_tokens if usage else 0,
+            "total_tokens": usage.total_tokens if usage else 0,
+        }
         return {
             "id": transformer.response_id,
             "object": "response",
@@ -144,14 +209,16 @@ class OpenAIHandler:
                     ],
                 }
             ],
-            "usage": {
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "total_tokens": 0,
-            },
+            "usage": usage_dict,
         }
 
-    def _build_completion_json(self, model: str, content: str, finish_reason: str = "stop") -> dict:
+    def _build_completion_json(
+        self,
+        model: str,
+        content: str,
+        finish_reason: str = "stop",
+        usage: TokenUsage | None = None,
+    ) -> dict:
         """Build a non-streaming legacy completions response."""
         return {
             "id": f"cmpl-{uuid.uuid4().hex[:12]}",
@@ -167,9 +234,9 @@ class OpenAIHandler:
                 }
             ],
             "usage": {
-                "prompt_tokens": 0,
-                "completion_tokens": 0,
-                "total_tokens": 0,
+                "prompt_tokens": usage.input_tokens if usage else 0,
+                "completion_tokens": usage.output_tokens if usage else 0,
+                "total_tokens": usage.total_tokens if usage else 0,
             },
         }
 
@@ -489,9 +556,10 @@ class OpenAIHandler:
                 parsed_chunks = parser.parse_stream(upstream_resp)
 
                 if not client_wants_stream:
-                    content, _finish_reason = await self._collect_chunks(parsed_chunks)
+                    content, _finish_reason, usage = await self._collect_chunks(parsed_chunks)
+                    request[REQ_TOKEN_USAGE] = usage
                     builder = CodexResponseBuilder(model=model)
-                    return web.json_response(builder.build_response(content=content))
+                    return web.json_response(builder.build_response(content=content, usage=usage))
 
                 response = web.StreamResponse(
                     status=200,
@@ -506,6 +574,7 @@ class OpenAIHandler:
                 transformer = CodexTransformer(model=model)
                 async for sse_line in transformer.transform(parsed_chunks):
                     await response.write(sse_line.encode("utf-8"))
+                request[REQ_TOKEN_USAGE] = transformer.usage
 
                 await response.write_eof()
                 return response
@@ -549,6 +618,7 @@ class OpenAIHandler:
             "temperature": body.get("temperature"),
             "stream": body.get("stream", True),
         }
+        self._apply_reasoning_to_chat_body(chat_body, self._extract_reasoning_effort(body))
 
         url, headers, payload = self._prepare_upstream_request(request, chat_body)
         model = chat_body.get("model", self.config.default_model)
@@ -574,12 +644,14 @@ class OpenAIHandler:
                 parsed_chunks = parser.parse_stream(upstream_resp)
 
                 if not client_wants_stream:
-                    content, finish_reason = await self._collect_chunks(parsed_chunks)
+                    content, finish_reason, usage = await self._collect_chunks(parsed_chunks)
+                    request[REQ_TOKEN_USAGE] = usage
                     return web.json_response(
                         self._build_completion_json(
                             model=model,
                             content=content,
                             finish_reason=finish_reason or "stop",
+                            usage=usage,
                         )
                     )
 
@@ -595,11 +667,16 @@ class OpenAIHandler:
 
                 completion_id = f"cmpl-{uuid.uuid4().hex[:12]}"
                 created = int(time.time())
+                usage = TokenUsage()
                 async for chunk in parsed_chunks:
                     if chunk.content_type == ContentType.DONE:
+                        if chunk.usage:
+                            usage = TokenUsage.from_usage_dict(chunk.usage)
                         break
                     if chunk.content_type == ContentType.REASONING:
                         continue
+                    if chunk.usage:
+                        usage = TokenUsage.from_usage_dict(chunk.usage)
                     if chunk.content or chunk.finish_reason:
                         sse_line = self._format_completion_chunk(
                             completion_id=completion_id,
@@ -609,6 +686,7 @@ class OpenAIHandler:
                             finish_reason=chunk.finish_reason,
                         )
                         await response.write(sse_line.encode("utf-8"))
+                request[REQ_TOKEN_USAGE] = usage
 
                 await response.write(b"data: [DONE]\n\n")
 
@@ -661,6 +739,7 @@ class OpenAIHandler:
         tool_choice = self._responses_tool_choice_to_chat_tool_choice(body.get("tool_choice"))
         if tool_choice is not None:
             chat_body["tool_choice"] = tool_choice
+        self._apply_reasoning_to_chat_body(chat_body, self._extract_reasoning_effort(body))
 
         url, headers, payload = self._prepare_upstream_request(request, chat_body)
         model = chat_body.get("model", self.config.default_model)
@@ -686,9 +765,10 @@ class OpenAIHandler:
                 parsed_chunks = parser.parse_stream(upstream_resp)
 
                 if not client_wants_stream:
-                    content, _finish_reason = await self._collect_chunks(parsed_chunks)
+                    content, _finish_reason, usage = await self._collect_chunks(parsed_chunks)
+                    request[REQ_TOKEN_USAGE] = usage
                     return web.json_response(
-                        self._build_responses_json(model=model, content=content)
+                        self._build_responses_json(model=model, content=content, usage=usage)
                     )
 
                 response = web.StreamResponse(
@@ -704,6 +784,7 @@ class OpenAIHandler:
                 transformer = ResponsesTransformer(model=model)
                 async for sse_event in transformer.transform(parsed_chunks):
                     await response.write(sse_event.encode("utf-8"))
+                request[REQ_TOKEN_USAGE] = transformer.usage
 
                 await response.write_eof()
                 return response
@@ -739,6 +820,7 @@ class OpenAIHandler:
         tools = self._anthropic_tools_to_chat_tools(body.get("tools"))
         if tools:
             chat_body["tools"] = tools
+        self._apply_reasoning_to_chat_body(chat_body, self._extract_reasoning_effort(body))
 
         url, headers, payload = self._prepare_upstream_request(request, chat_body)
         model = chat_body.get("model", self.config.default_model)
@@ -765,12 +847,15 @@ class OpenAIHandler:
                 transformer = AnthropicTransformer(model=model)
 
                 if not client_wants_stream:
-                    content, finish_reason = await self._collect_chunks(parsed_chunks)
+                    content, finish_reason, usage = await self._collect_chunks(parsed_chunks)
+                    request[REQ_TOKEN_USAGE] = usage
                     stop_reason = (
                         "end_turn" if finish_reason == "stop" else finish_reason or "end_turn"
                     )
                     return web.json_response(
-                        transformer.build_message_json(content=content, stop_reason=stop_reason)
+                        transformer.build_message_json(
+                            content=content, stop_reason=stop_reason, usage=usage
+                        )
                     )
 
                 response = web.StreamResponse(
@@ -785,6 +870,7 @@ class OpenAIHandler:
 
                 async for sse_event in transformer.transform_stream(parsed_chunks):
                     await response.write(sse_event.encode("utf-8"))
+                request[REQ_TOKEN_USAGE] = transformer.usage
 
                 await response.write_eof()
                 return response

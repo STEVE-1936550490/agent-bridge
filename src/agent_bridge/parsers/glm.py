@@ -27,6 +27,7 @@ class GLMStreamChunk:
     raw_chunk: str
     finish_reason: str | None = None
     tool_calls: list[dict] | None = None
+    usage: dict | None = None
 
 
 class GLMParser:
@@ -40,6 +41,15 @@ class GLMParser:
     - Standard OpenAI format chunks
 
     This parser detects and separates these components.
+
+    Token usage handling:
+    When the upstream is asked for usage via ``stream_options.include_usage``
+    (an OpenAI-standard field), the provider sends a final streaming chunk
+    whose ``choices`` is empty and whose top-level ``usage`` carries the token
+    counts. Some providers instead attach ``usage`` to the last content chunk.
+    Both shapes are supported here: the usage dict is forwarded on the parsed
+    chunk regardless of where it appears, and an empty-choices usage chunk is
+    emitted as an empty content chunk so the stream is not terminated early.
     """
 
     def __init__(self) -> None:
@@ -93,8 +103,22 @@ class GLMParser:
 
         This method needs to be adjusted based on actual GLM output format.
         """
+        usage = data.get("usage")
+        usage_dict = usage if isinstance(usage, dict) else None
+
         choices = data.get("choices", [])
         if not choices:
+            # OpenAI-compatible providers send a final usage-only chunk with
+            # empty choices when stream_options.include_usage is requested.
+            # Forward the usage instead of dropping it; keep it as an empty
+            # content chunk so the real [DONE] marker still terminates stream.
+            if usage_dict:
+                return GLMStreamChunk(
+                    content_type=ContentType.CONTENT,
+                    content="",
+                    raw_chunk=raw_line,
+                    usage=usage_dict,
+                )
             return None
 
         delta = choices[0].get("delta", {})
@@ -110,6 +134,7 @@ class GLMParser:
                 content=reasoning_content,
                 raw_chunk=raw_line,
                 finish_reason=finish_reason,
+                usage=usage_dict,
             )
 
         tool_calls = delta.get("tool_calls")
@@ -120,11 +145,12 @@ class GLMParser:
                 raw_chunk=raw_line,
                 finish_reason=finish_reason,
                 tool_calls=tool_calls,
+                usage=usage_dict,
             )
 
         # Regular content
         content = delta.get("content", "")
-        if not content and not finish_reason:
+        if not content and not finish_reason and not usage_dict:
             return None
 
         # Detect if we're still in reasoning phase based on content markers
@@ -136,6 +162,7 @@ class GLMParser:
                     content_type=ContentType.REASONING,
                     content=content,
                     raw_chunk=raw_line,
+                    usage=usage_dict,
                 )
             else:
                 self.in_reasoning = False
@@ -145,6 +172,7 @@ class GLMParser:
             content=content,
             raw_chunk=raw_line,
             finish_reason=finish_reason,
+            usage=usage_dict,
         )
 
     def _is_reasoning_marker(self, content: str) -> bool:

@@ -10,7 +10,7 @@ from typing import Callable
 
 import yaml
 
-from .config import ClientProtocol, ProviderApi
+from .config import ClientProtocol, ProviderApi, ReasoningMode
 
 DEFAULT_PROVIDER_NAME = "moma_glm51"
 DEFAULT_BASE_URL = "https://moma.cmecloud.cn/v1"
@@ -18,6 +18,7 @@ DEFAULT_API_KEY_ENV = "AGENT_BRIDGE_API_KEY"
 DEFAULT_MODEL = "ZHIPU/GLM-5.1"
 DEFAULT_PROVIDER_API: ProviderApi = "openai_chat"
 DEFAULT_CLIENT_PROTOCOL: ClientProtocol = "codex_responses"
+DEFAULT_REASONING_MODE: ReasoningMode = "passthrough"
 DEFAULT_HOST = "0.0.0.0"
 DEFAULT_PORT = 17681
 
@@ -34,6 +35,7 @@ class ConfigureOptions:
     model: str | None = None
     provider_api: ProviderApi | None = None
     client_protocol: ClientProtocol | None = None
+    reasoning_mode: ReasoningMode | None = None
     host: str | None = None
     port: int | None = None
     interactive: bool = True
@@ -49,6 +51,7 @@ class ConfigureSummary:
     model: str
     provider_api: str
     client_protocol: str
+    reasoning_mode: str
     host: str
     port: int
     api_key_source: str
@@ -113,6 +116,7 @@ def configure_provider(
     default_model = str(existing.get("model") or data.get("default_model") or DEFAULT_MODEL)
     default_provider_api = str(existing.get("provider_api") or DEFAULT_PROVIDER_API)
     default_client_protocol = str(existing.get("client_protocol") or DEFAULT_CLIENT_PROTOCOL)
+    default_reasoning_mode = str(existing.get("reasoning_mode") or DEFAULT_REASONING_MODE)
     server = data.get("server") if isinstance(data.get("server"), dict) else {}
     default_host = str(server.get("host") or DEFAULT_HOST)
     default_port = int(server.get("port") or DEFAULT_PORT)
@@ -135,6 +139,11 @@ def configure_provider(
             options.client_protocol or default_client_protocol,
             input_func,
         )
+        default_reasoning_mode = _prompt(
+            "Reasoning mode (passthrough | thinking | none)",
+            options.reasoning_mode or default_reasoning_mode,
+            input_func,
+        )
         prompted_api_key_env = _prompt(
             "API key environment variable name (not the key itself)",
             api_key_env or default_api_key_env,
@@ -154,6 +163,7 @@ def configure_provider(
     model = options.model or default_model
     provider_api = options.provider_api or default_provider_api
     client_protocol = options.client_protocol or default_client_protocol
+    reasoning_mode = options.reasoning_mode or default_reasoning_mode
     host = options.host or default_host
     port = options.port or default_port
 
@@ -162,6 +172,7 @@ def configure_provider(
         "model": model,
         "provider_api": provider_api,
         "client_protocol": client_protocol,
+        "reasoning_mode": reasoning_mode,
     }
     if api_key:
         provider_data["api_key"] = api_key
@@ -204,6 +215,7 @@ def configure_provider(
         model=model,
         provider_api=str(provider_api),
         client_protocol=str(client_protocol),
+        reasoning_mode=str(reasoning_mode),
         host=host,
         port=port,
         api_key_source="direct" if api_key else f"env:{api_key_env or DEFAULT_API_KEY_ENV}",
@@ -221,6 +233,7 @@ def format_configure_summary(summary: ConfigureSummary) -> str:
             f"- Model: {summary.model}",
             f"- Provider API: {summary.provider_api}",
             f"- Client protocol: {summary.client_protocol}",
+            f"- Reasoning mode: {summary.reasoning_mode}",
             f"- Server: {summary.host}:{summary.port}",
             f"- API key: {summary.api_key_source}",
         ]

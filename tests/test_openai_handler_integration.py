@@ -509,3 +509,314 @@ async def test_anthropic_messages_bridges_tools() -> None:
     finally:
         await proxy_runner.cleanup()
         await upstream_runner.cleanup()
+
+
+async def _write_glm_stream_with_usage(response: web.StreamResponse) -> None:
+    """Stream that includes a usage-only final chunk (OpenAI include_usage shape)."""
+    chunks = [
+        {"choices": [{"delta": {"content": "Hello"}}]},
+        {"choices": [{"delta": {"content": " world"}}]},
+        {"choices": [{"delta": {}, "finish_reason": "stop"}]},
+        {
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 6, "total_tokens": 16},
+        },
+    ]
+    for chunk in chunks:
+        await response.write(f"data: {json.dumps(chunk)}\n\n".encode("utf-8"))
+    await response.write(b"data: [DONE]\n\n")
+
+
+async def _start_mock_upstream_with_usage(
+    seen_payloads: list[dict],
+) -> tuple[web.AppRunner, str]:
+    async def handle_chat(request: web.Request) -> web.StreamResponse:
+        seen_payloads.append(await request.json())
+        response = web.StreamResponse(
+            headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache"}
+        )
+        await response.prepare(request)
+        await _write_glm_stream_with_usage(response)
+        await response.write_eof()
+        return response
+
+    app = web.Application()
+    app.router.add_post("/v1/chat/completions", handle_chat)
+    return await _start_app(app)
+
+
+@pytest.mark.asyncio
+async def test_upstream_usage_observed_in_logs_stream() -> None:
+    """When the upstream emits usage, it appears in /logs with source=upstream."""
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_upstream_with_usage(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy(upstream_url)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{proxy_url}/v1/responses",
+                headers={"X-Request-ID": "req_usage_stream"},
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "input": "Say hello",
+                    "stream": True,
+                },
+            ) as response:
+                assert response.status == 200
+                await response.text()
+
+            async with session.get(f"{proxy_url}/logs") as response:
+                assert response.status == 200
+                payload = await response.json()
+
+        logs = payload["data"]
+        log = next(log for log in logs if log["request_id"] == "req_usage_stream")
+        assert log["token_usage"]["source"] == "upstream"
+        assert log["token_usage"]["input_tokens"] == 10
+        assert log["token_usage"]["output_tokens"] == 6
+        assert log["token_usage"]["total_tokens"] == 16
+        # The proxy must have asked the upstream for usage.
+        assert seen_payloads[0]["stream_options"]["include_usage"] is True
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_upstream_usage_observed_in_logs_non_stream() -> None:
+    """Non-streaming responses also surface upstream usage in /logs."""
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_upstream_with_usage(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy(upstream_url)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{proxy_url}/v1/chat/completions",
+                headers={"X-Request-ID": "req_usage_nonstream"},
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "messages": [{"role": "user", "content": "Say hello"}],
+                    "stream": False,
+                },
+            ) as response:
+                assert response.status == 200
+                payload = await response.json()
+
+            async with session.get(f"{proxy_url}/logs") as response:
+                assert response.status == 200
+                logs = (await response.json())["data"]
+
+        log = next(log for log in logs if log["request_id"] == "req_usage_nonstream")
+        assert log["token_usage"]["source"] == "upstream"
+        assert log["token_usage"]["input_tokens"] == 10
+        assert log["token_usage"]["output_tokens"] == 6
+
+        # The non-streaming response body should also carry the real usage.
+        assert payload["usage"]["prompt_tokens"] == 10
+        assert payload["usage"]["completion_tokens"] == 6
+        assert payload["usage"]["total_tokens"] == 16
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_missing_usage_stays_unavailable() -> None:
+    """When the upstream never emits usage, source stays unavailable (no error)."""
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_upstream(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy(upstream_url)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{proxy_url}/v1/chat/completions",
+                headers={"X-Request-ID": "req_no_usage"},
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "messages": [{"role": "user", "content": "Say hello"}],
+                    "stream": True,
+                },
+            ) as response:
+                assert response.status == 200
+                await response.text()
+
+            async with session.get(f"{proxy_url}/logs") as response:
+                assert response.status == 200
+                logs = (await response.json())["data"]
+
+        log = next(log for log in logs if log["request_id"] == "req_no_usage")
+        assert log["token_usage"]["source"] == "unavailable"
+        # include_usage is still requested; the upstream just chose not to return it.
+        assert seen_payloads[0]["stream_options"]["include_usage"] is True
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+from agent_bridge.config import ProviderConfig
+
+
+async def _start_proxy_with_reasoning(
+    upstream_base_url: str, reasoning_mode: str
+) -> tuple[web.AppRunner, str]:
+    """Start a proxy whose active provider uses the given reasoning_mode."""
+    config = Config(
+        upstream=UpstreamConfig(base_url=f"{upstream_base_url}/v1", api_key="test-key"),
+        server=ServerConfig(host="127.0.0.1", port=0),
+        providers={
+            "test": ProviderConfig(
+                base_url=f"{upstream_base_url}/v1",
+                api_key="test-key",
+                model="ZHIPU/GLM-5.1",
+                provider_api="openai_chat",
+                client_protocol="codex_responses",
+                reasoning_mode=reasoning_mode,  # type: ignore[arg-type]
+            )
+        },
+        active_provider="test",
+    )
+    proxy = ProxyServer(config)
+    proxy.app.on_startup.append(proxy.on_startup)
+    proxy.app.on_cleanup.append(proxy.on_cleanup)
+    return await _start_app(proxy.app)
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_high_maps_to_thinking_enabled() -> None:
+    """reasoning_mode=thinking: effort high -> thinking enabled upstream."""
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_upstream(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy_with_reasoning(upstream_url, "thinking")
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{proxy_url}/v1/responses",
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "input": "Say hello",
+                    "reasoning": {"effort": "high"},
+                    "stream": True,
+                },
+            ) as response:
+                assert response.status == 200
+                await response.text()
+
+        assert seen_payloads[0]["thinking"] == {"type": "enabled"}
+        assert "reasoning_effort" not in seen_payloads[0]
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_low_maps_to_thinking_disabled() -> None:
+    """reasoning_mode=thinking: effort low -> thinking disabled upstream."""
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_upstream(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy_with_reasoning(upstream_url, "thinking")
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{proxy_url}/v1/responses",
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "input": "Say hello",
+                    "reasoning": {"effort": "low"},
+                    "stream": True,
+                },
+            ) as response:
+                assert response.status == 200
+                await response.text()
+
+        assert seen_payloads[0]["thinking"] == {"type": "disabled"}
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_reasoning_effort_passthrough_forwards_field() -> None:
+    """reasoning_mode=passthrough: effort forwarded as reasoning_effort."""
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_upstream(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy_with_reasoning(upstream_url, "passthrough")
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{proxy_url}/v1/chat/completions",
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "messages": [{"role": "user", "content": "Say hello"}],
+                    "reasoning_effort": "high",
+                    "stream": True,
+                },
+            ) as response:
+                assert response.status == 200
+                await response.text()
+
+        assert seen_payloads[0]["reasoning_effort"] == "high"
+        assert "thinking" not in seen_payloads[0]
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_reasoning_mode_none_drops_effort() -> None:
+    """reasoning_mode=none: no reasoning field reaches upstream."""
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_upstream(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy_with_reasoning(upstream_url, "none")
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{proxy_url}/v1/responses",
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "input": "Say hello",
+                    "reasoning": {"effort": "high"},
+                    "stream": True,
+                },
+            ) as response:
+                assert response.status == 200
+                await response.text()
+
+        assert "thinking" not in seen_payloads[0]
+        assert "reasoning_effort" not in seen_payloads[0]
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
+async def test_no_reasoning_field_leaves_upstream_untouched() -> None:
+    """When the client sends no reasoning, nothing is added upstream."""
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_upstream(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy_with_reasoning(upstream_url, "thinking")
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                f"{proxy_url}/v1/responses",
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "input": "Say hello",
+                    "stream": True,
+                },
+            ) as response:
+                assert response.status == 200
+                await response.text()
+
+        assert "thinking" not in seen_payloads[0]
+        assert "reasoning_effort" not in seen_payloads[0]
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()

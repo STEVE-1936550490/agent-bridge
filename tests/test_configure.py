@@ -36,6 +36,7 @@ def test_configure_provider_writes_provider_config_from_flags(tmp_path: Path) ->
         "model": "local-model",
         "provider_api": "openai_chat",
         "client_protocol": "codex_responses",
+        "reasoning_mode": "passthrough",
     }
     assert data["upstream"] == {
         "base_url": "http://127.0.0.1:8000/v1",
@@ -159,6 +160,7 @@ def test_configure_provider_interactive_uses_prompts(tmp_path: Path) -> None:
             "custom-model",
             "openai_chat",
             "codex_responses",
+            "thinking",
             "CUSTOM_API_KEY",
             "127.0.0.1",
             "18000",
@@ -188,6 +190,7 @@ def test_configure_provider_interactive_treats_key_in_env_prompt_as_direct_key(
             "custom-model",
             "openai_chat",
             "codex_responses",
+            "passthrough",
             "Nz2q3oOejp7UReRYVct9h3_key",
             "127.0.0.1",
             "18000",

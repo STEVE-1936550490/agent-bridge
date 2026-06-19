@@ -10,6 +10,7 @@ import yaml
 ProviderApi = Literal["openai_chat", "openai_responses", "anthropic_messages"]
 ClientProtocol = Literal["codex_responses", "anthropic"]
 Mode = Literal["codex", "anthropic"]
+ReasoningMode = Literal["passthrough", "thinking", "none"]
 
 DEFAULT_MODEL = "ZHIPU/GLM-5.1"
 DEFAULT_PORT = 17681
@@ -43,6 +44,7 @@ class ProviderConfig:
     model: str = DEFAULT_MODEL
     provider_api: ProviderApi = "openai_chat"
     client_protocol: ClientProtocol = "codex_responses"
+    reasoning_mode: ReasoningMode = "passthrough"
 
     def __post_init__(self) -> None:
         if self.api_key_env and not self.api_key:
@@ -160,6 +162,7 @@ class Config:
         model: str | None = None,
         provider_api: ProviderApi | None = None,
         client_protocol: ClientProtocol | None = None,
+        reasoning_mode: ReasoningMode | None = None,
     ) -> ProviderConfig:
         """Select a provider and apply optional CLI overrides."""
         selected_name = name or self.active_provider
@@ -180,6 +183,7 @@ class Config:
             model=model or provider.model,
             provider_api=provider_api or provider.provider_api,
             client_protocol=client_protocol or provider.client_protocol,
+            reasoning_mode=reasoning_mode or provider.reasoning_mode,
         )
         validate_protocol_pair(provider.client_protocol, provider.provider_api)
 

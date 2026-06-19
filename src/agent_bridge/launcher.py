@@ -14,7 +14,13 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from .codex import DEFAULT_ENV_KEY, DEFAULT_PROFILE, CodexInstallConfig, profile_content, default_codex_home
+from .codex import (
+    DEFAULT_ENV_KEY,
+    DEFAULT_PROFILE,
+    CodexInstallConfig,
+    profile_content,
+    default_codex_home,
+)
 from .config import Config
 
 

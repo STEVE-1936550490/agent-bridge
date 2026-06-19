@@ -230,6 +230,66 @@ anthropic -> openai_chat
 | `/logs` | 最近结构化请求日志 |
 | `/dashboard` | 本地日志看板 |
 
+## 推理强度调节
+
+Codex 和部分客户端通过 `reasoning: {"effort": "minimal"|"low"|"medium"|"high"}`
+控制模型回答前的思考程度。不同上游 provider 对这个参数的支持方式不同，AgentBridge
+在代理层做转换，让调节在所有 provider 上都能生效。
+
+### 工作方式
+
+在 provider 配置里设置 `reasoning_mode`：
+
+| reasoning_mode | 行为 | 适用 provider |
+|----------------|------|---------------|
+| `passthrough`（默认） | 直接把 `reasoning_effort` 透传给上游 | OpenAI 官方等标准 provider |
+| `thinking` | effort 映射成 `thinking: {"type": "enabled"/"disabled"}` | 智谱 GLM / MOMA（只支持开/关，不支持强度梯度） |
+| `none` | 不处理，不向上游发送任何 reasoning 字段 | 明确不需要调节的 provider |
+
+`thinking` 模式的映射规则（探测确认 GLM 上游只支持开/关二态）：
+
+| Codex effort | 映射结果 | 效果 |
+|--------------|----------|------|
+| `minimal` / `low` | `thinking: {"type": "disabled"}` | 关闭思考，响应快 |
+| `medium` / `high` | `thinking: {"type": "enabled"}` | 开启思考，响应慢但更深入 |
+
+### 配置
+
+`config.yaml` 中给 provider 加 `reasoning_mode`：
+
+```yaml
+providers:
+  moma_glm51:
+    base_url: "https://moma.cmecloud.cn/v1"
+    api_key_env: "AGENT_BRIDGE_API_KEY"
+    model: "ZHIPU/GLM-5.1"
+    provider_api: "openai_chat"
+    client_protocol: "codex_responses"
+    reasoning_mode: "thinking"
+```
+
+交互式或脚本式配置时也可以指定：
+
+```bash
+agent-bridge configure --reasoning-mode thinking
+```
+
+`agent-bridge serve --reasoning-mode thinking` 可临时覆盖。
+
+### 用户侧怎么调
+
+在 Codex profile（`~/.codex/agent_bridge.config.toml`）里设置：
+
+```toml
+model = "ZHIPU/GLM-5.1"
+model_provider = "agent_bridge"
+model_reasoning_effort = "high"   # minimal|low|medium|high
+```
+
+Codex 会把这个值放进请求的 `reasoning.effort` 字段发给 AgentBridge，AgentBridge 再
+按 provider 的 `reasoning_mode` 转换后转发给上游。用户**不需要安装额外脚本**，只要
+通过 `agent-bridge run` / `agent-bridge start` 启动（已有的正常流程），映射就自动生效。
+
 ## 观测
 
 查看最近请求日志：
@@ -246,6 +306,51 @@ http://127.0.0.1:17681/dashboard
 ```
 
 日志字段包括 request id、provider、model、endpoint、latency、status、stream state、error、token usage 来源。
+
+### Token 用量观测
+
+AgentBridge 会自动向所有 OpenAI Chat Completions 兼容的上游请求流式 token 用量
+（通过标准 `stream_options.include_usage`），并在 `/logs` 和 dashboard 里展示。
+
+工作方式（能测就显示，不兼容不报错）：
+
+- 代理对每个上游流式请求附加 `stream_options.include_usage = true`。
+- 上游若支持，会在流的最后一个 chunk 里返回 `usage`（`prompt_tokens` /
+  `completion_tokens` / `total_tokens`）。代理解析后写入请求日志和响应体。
+- 上游若不支持或忽略该字段，请求照常完成，日志里 `token_usage.source` 显示为
+  `unavailable`，**不会报错、不影响内容**。
+- 字段命名同时兼容 OpenAI 风格（`prompt_tokens`）和 Anthropic 风格
+  （`input_tokens`）。
+
+`/logs` 里每条请求的 `token_usage` 字段示例：
+
+```json
+{
+  "source": "upstream",
+  "input_tokens": 10,
+  "output_tokens": 6,
+  "total_tokens": 16
+}
+```
+
+`source` 取值：
+
+| source        | 含义 |
+|---------------|------|
+| `upstream`    | 上游真实返回了 usage |
+| `unavailable` | 上游未返回 usage（代理未做本地估算） |
+
+已知会返回 token 用量的上游（流式 `include_usage`）：
+
+| 上游 / 模型 | 是否返回 usage | 备注 |
+|-------------|----------------|------|
+| OpenAI 官方（gpt-4o / gpt-5 等） | 是 | 标准 `stream_options.include_usage` |
+| 智谱 GLM（MOMA `moma.cmecloud.cn`，GLM-4.x / 5.x） | 视上游版本而定 | 以实际 `/logs` 里 `source` 为准 |
+| 其他 OpenAI 兼容 provider | 视实现而定 | 不支持的自动降级为 `unavailable` |
+
+如果你接入的上游确实返回了 usage，但在 `/logs` 里仍显示 `unavailable`，说明该
+上游没有遵循 OpenAI 的 `include_usage` 约定。这不影响请求本身，只是 token 量
+无法观测。
 
 ## 常见问题
 

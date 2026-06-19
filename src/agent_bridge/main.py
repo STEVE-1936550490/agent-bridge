@@ -78,6 +78,11 @@ def _add_provider_args(parser: argparse.ArgumentParser) -> None:
         choices=["codex_responses", "anthropic"],
         help="Client wire protocol",
     )
+    parser.add_argument(
+        "--reasoning-mode",
+        choices=["passthrough", "thinking", "none"],
+        help="How to translate reasoning effort for the upstream provider",
+    )
 
 
 def _run_server_from_args(args: argparse.Namespace) -> int:
@@ -104,6 +109,7 @@ def _run_server_from_args(args: argparse.Namespace) -> int:
             model=getattr(args, "model", None),
             provider_api=getattr(args, "provider_api", None),
             client_protocol=getattr(args, "client_protocol", None),
+            reasoning_mode=getattr(args, "reasoning_mode", None),
         )
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -235,6 +241,7 @@ def _configure_from_args(args: argparse.Namespace) -> int:
         model=args.model,
         provider_api=args.provider_api,
         client_protocol=args.client_protocol,
+        reasoning_mode=args.reasoning_mode,
         host=args.host,
         port=args.port,
         interactive=not args.no_interactive,
@@ -314,6 +321,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--client-protocol",
         choices=["codex_responses", "anthropic"],
         default=None,
+    )
+    configure_parser.add_argument(
+        "--reasoning-mode",
+        choices=["passthrough", "thinking", "none"],
+        default=None,
+        help="Reasoning effort translation mode (default: passthrough)",
     )
     configure_parser.add_argument("--host", default=None)
     configure_parser.add_argument("--port", type=int, default=None)

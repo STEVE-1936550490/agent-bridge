@@ -77,3 +77,42 @@ def test_parse_no_choices():
     line = 'data: {"model":"glm-5.1"}'
     result = parser.parse_sse_line(line)
     assert result is None
+
+
+def test_parse_usage_only_chunk():
+    """A final usage-only chunk (empty choices) is forwarded, not dropped."""
+    parser = GLMParser()
+    line = (
+        'data: {"choices":[],"usage":{"prompt_tokens":10,'
+        '"completion_tokens":5,"total_tokens":15}}'
+    )
+    result = parser.parse_sse_line(line)
+    assert result is not None
+    assert result.content_type == ContentType.CONTENT
+    assert result.content == ""
+    assert result.usage is not None
+    assert result.usage["prompt_tokens"] == 10
+    assert result.usage["total_tokens"] == 15
+
+
+def test_parse_chunk_with_attached_usage():
+    """Usage attached to a normal content chunk is forwarded too."""
+    parser = GLMParser()
+    line = (
+        'data: {"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}],'
+        '"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}'
+    )
+    result = parser.parse_sse_line(line)
+    assert result is not None
+    assert result.content == "hi"
+    assert result.finish_reason == "stop"
+    assert result.usage is not None
+    assert result.usage["completion_tokens"] == 2
+
+
+def test_parse_empty_choices_no_usage_dropped():
+    """Empty choices without usage is still dropped (no false DONE)."""
+    parser = GLMParser()
+    line = 'data: {"model":"glm-5.1","choices":[]}'
+    result = parser.parse_sse_line(line)
+    assert result is None

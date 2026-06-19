@@ -5,6 +5,7 @@ import time
 import uuid
 from typing import AsyncIterator
 
+from ..observability import TokenUsage
 from ..parsers.glm import ContentType, GLMStreamChunk
 
 
@@ -28,6 +29,7 @@ class ResponsesTransformer:
         self.full_text = ""
         self.tool_calls: dict[int, dict] = {}
         self.output_items: list[dict] = []
+        self.usage = TokenUsage()
 
     def format_response_created(self) -> str:
         """Format the response.created event."""
@@ -276,7 +278,11 @@ class ResponsesTransformer:
                 "instructions": "",
                 "model": self.model,
                 "output": self.output_items,
-                "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+                "usage": {
+                    "input_tokens": self.usage.input_tokens or 0,
+                    "output_tokens": self.usage.output_tokens or 0,
+                    "total_tokens": self.usage.total_tokens or 0,
+                },
             },
         }
         return f"event: response.completed\ndata: {json.dumps(event_data)}\n\n"
@@ -299,6 +305,9 @@ class ResponsesTransformer:
         yield self.format_response_in_progress()
 
         async for chunk in chunks:
+            if chunk.usage:
+                self.usage = TokenUsage.from_usage_dict(chunk.usage)
+
             if chunk.content_type == ContentType.DONE:
                 # Finish the response with response.completed
                 if self.text_sent:
