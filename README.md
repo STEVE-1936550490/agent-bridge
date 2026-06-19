@@ -75,13 +75,33 @@ agent-bridge install --install-codex-cli --install-claude-code
 agent-bridge install --npm-registry https://registry.npmjs.org
 ```
 
-> Claude Code CLI 目前只做安装/检测准备；代理协议兼容会在后续 Anthropic 阶段完成。
+> Claude Code CLI 已支持通过本地 `/v1/messages` 兼容入口连接当前 OpenAI Chat Completions provider；如果你只使用 Codex，可以不安装 Claude Code CLI。
 
 也可以手动复制配置模板并填入你的 API Key：
 
 ```bash
 cp config.yaml.example config.yaml
 ```
+
+或者使用交互式配置命令：
+
+```bash
+agent-bridge configure --config config.yaml
+```
+
+也可以用命令行一次写入配置，适合脚本或远程机器初始化：
+
+```bash
+agent-bridge configure --config config.yaml --no-interactive \
+  --provider moma_glm51 \
+  --base-url "https://moma.cmecloud.cn/v1" \
+  --api-key-env MOMA_API_KEY \
+  --model "ZHIPU/GLM-5.1" \
+  --provider-api openai_chat \
+  --client-protocol codex_responses
+```
+
+`configure` 默认会同步 Codex 的 `moma` profile 到当前本地代理地址和模型；如只想写 `config.yaml`，可加 `--skip-codex-profile`。
 
 编辑 `config.yaml`：
 
@@ -103,11 +123,11 @@ logging:
 如果要启用多供应商配置，可以在 `config.yaml` 中使用 `providers`，然后启动时用 `-p` 选择：
 
 ```yaml
-active_provider: "moma"
+active_provider: "moma_glm51"
 default_model: "ZHIPU/GLM-5.1"
 
 providers:
-  moma:
+  moma_glm51:
     base_url: "https://moma.cmecloud.cn/v1"
     api_key_env: "MOMA_API_KEY"
     model: "ZHIPU/GLM-5.1"
@@ -137,7 +157,7 @@ source ~/.bashrc
 指定配置中的供应商：
 
 ```bash
-agent-bridge serve --config config.yaml -p moma
+agent-bridge serve --config config.yaml -p moma_glm51
 ```
 
 临时使用 OpenAI-compatible 供应商：
@@ -158,22 +178,34 @@ curl http://localhost:17681/health
 # 应返回 {"status": "healthy"}
 ```
 
-一条命令启动代理并进入 Codex：
+日常使用可以直接读取 `config.yaml` 的 `active_provider`，启动代理并进入 Codex：
 
 ```bash
-agent-bridge run -p moma --client codex
+agent-bridge
+```
+
+等价的显式命令：
+
+```bash
+agent-bridge start
+```
+
+如果需要指定 provider 或传入更多参数，可以继续使用完整入口：
+
+```bash
+agent-bridge run -p moma_glm51 --client codex
 ```
 
 也可以把参数透传给 Codex，例如非交互执行：
 
 ```bash
-agent-bridge run -p moma --client codex exec "只输出 OK"
+agent-bridge run -p moma_glm51 --client codex exec "只输出 OK"
 ```
 
 启动代理并进入 Claude Code：
 
 ```bash
-agent-bridge run -p moma --client claude
+agent-bridge run -p moma_glm51 --client claude
 ```
 
 `run` 会启动代理、等待 `/health` 成功、再启动客户端；客户端退出后会清理代理子进程。
@@ -211,6 +243,16 @@ agent-bridge install-codex --base-url http://127.0.0.1:9000/v1
 | **venv** | `cd /path/to/MoMa_proxy && source .venv/bin/activate && moma` |
 
 > 默认 Codex（GPT）不受影响，仍通过 `codex` 命令使用。
+
+#### Codex 模型元数据提示
+
+使用 `ZHIPU/GLM-5.1` 等非 OpenAI 官方模型时，Codex 可能输出类似提示：
+
+```text
+Model metadata for `ZHIPU/GLM-5.1` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.
+```
+
+这是 Codex 本地没有内置该模型的 metadata，因而回退到默认模型信息；不是 AgentBridge 配置错误，也不是 API key 或上游 URL 错误。只要请求能正常返回内容，这个提示通常可以忽略。
 
 ## 端点说明
 
@@ -328,11 +370,11 @@ conda activate moma_proxy && agent-bridge install --install-codex-cli
 # 启动 MOMA Codex
 conda activate moma_proxy && moma
 
-# 一条命令启动代理 + Codex
-conda activate moma_proxy && agent-bridge run -p moma --client codex
+# 一条命令启动代理 + Codex（读取 config.yaml 的 active_provider）
+conda activate moma_proxy && agent-bridge
 
 # 一条命令启动代理 + Claude Code
-conda activate moma_proxy && agent-bridge run -p moma --client claude
+conda activate moma_proxy && agent-bridge run -p moma_glm51 --client claude
 ```
 
 ### venv 环境
@@ -350,11 +392,11 @@ cd /path/to/MoMa_proxy && source .venv/bin/activate && agent-bridge install --in
 # 启动 MOMA Codex
 cd /path/to/MoMa_proxy && source .venv/bin/activate && moma
 
-# 一条命令启动代理 + Codex
-cd /path/to/MoMa_proxy && source .venv/bin/activate && agent-bridge run -p moma --client codex
+# 一条命令启动代理 + Codex（读取 config.yaml 的 active_provider）
+cd /path/to/MoMa_proxy && source .venv/bin/activate && agent-bridge
 
 # 一条命令启动代理 + Claude Code
-cd /path/to/MoMa_proxy && source .venv/bin/activate && agent-bridge run -p moma --client claude
+cd /path/to/MoMa_proxy && source .venv/bin/activate && agent-bridge run -p moma_glm51 --client claude
 ```
 
 ## 配置选项
@@ -381,7 +423,7 @@ cd /path/to/MoMa_proxy && source .venv/bin/activate && agent-bridge run -p moma 
 src/moma_proxy/
 ├── __init__.py
 ├── __main__.py          # python -m 入口
-├── main.py              # CLI 入口（install / serve / run / install-codex / codex）
+├── main.py              # CLI 入口（configure / install / serve / start / run / install-codex / codex）
 ├── server.py            # aiohttp 服务器
 ├── config.py            # YAML 配置加载，支持环境变量展开
 ├── codex.py             # Codex profile 安装与启动逻辑
@@ -393,7 +435,7 @@ src/moma_proxy/
 └── transformers/
     ├── codex.py         # Chat Completions 格式转换
     ├── responses.py     # Responses API 格式转换（含 tool_calls 生命周期事件）
-    └── anthropic.py     # Anthropic 格式转换（TODO）
+    └── anthropic.py     # Anthropic Messages 格式转换
 ```
 
 ## 开发
@@ -418,8 +460,8 @@ mypy src
 - [x] `/v1/responses` 端点支持（Codex 兼容）
 - [x] 性能优化（响应时间优化至 4.8 秒）
 - [x] MOMA 工具调用格式验证（标准 OpenAI tool_calls）
-- [ ] Anthropic 协议支持（Claude Code 兼容）
-- [ ] 一键启动：`agent-bridge run` 同时拉起代理 + Codex/Claude Code，无需手动开两个终端；自动检测安装状态，未安装时引导安装
+- [x] Anthropic 协议支持（Claude Code 兼容基础）
+- [x] 一键启动：`agent-bridge` / `agent-bridge start` / `agent-bridge run` 同时拉起代理 + Codex/Claude Code，无需手动开两个终端
 
 ## License
 

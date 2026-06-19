@@ -21,9 +21,9 @@
 - 已具备 Responses API 文本流基础能力。
 - 已支持 OpenAI 标准 `delta.tool_calls` 解析和 Responses API function call 事件输出。
 - 已验证 MOMA 上游使用标准 OpenAI `tool_calls` 格式，不需要额外 tool call parser 分支。
-- 当前主要缺口是 `agent-bridge run` 一键启动、监控日志、UI 看板和 Claude Code/Anthropic 协议支持。
-- 阶段 2 已提供跨平台安装入口；Claude Code 目前仅安装/检测 CLI，协议兼容仍属于后续阶段。
-- 阶段 3 已提供 provider/protocol 配置抽象；当前只放行已实现的 `codex_responses -> openai_chat`。
+- `agent-bridge run` 一键启动、监控日志、UI 看板和 Claude Code/Anthropic 基础协议支持已完成。
+- 阶段 2 已提供跨平台安装入口；Claude Code CLI 检测/安装与基础 Anthropic Messages 兼容路径已具备。
+- 阶段 3 已提供 provider/protocol 配置抽象；当前放行已实现的 `codex_responses -> openai_chat` 和 `anthropic -> openai_chat`。
 - 阶段 3.5 已提前完成对外命名收敛：主 CLI 为 `agent-bridge`，兼容保留 `moma-proxy` 和 `moma`。
 
 ## 阶段 0：文档与边界收敛
@@ -120,13 +120,13 @@
 示例目标：
 
 ```bash
-agent-bridge run -p moma --client codex
+agent-bridge run -p moma_glm51 --client codex
 agent-bridge run -p openai-compatible --base-url http://127.0.0.1:8000/v1 --model local-model
 ```
 
 验收：
 
-- `agent-bridge run -p moma --client codex` 使用配置中的 MOMA provider。
+- `agent-bridge run -p moma_glm51 --client codex` 使用配置中的 MOMA GLM-5.1 provider profile。
 - 自定义 OpenAI-compatible provider 可以通过命令行临时启动。
 - 不兼容的 client/provider protocol 组合会在启动前报错。
 
@@ -188,7 +188,7 @@ agent-bridge run -p openai-compatible --base-url http://127.0.0.1:8000/v1 --mode
 - 新增 `agent-bridge run`。
 - `run` 会启动代理子进程、等待 `/health`、启动 Codex，并在客户端退出或失败时清理代理子进程。
 - 支持 `-p/--platform` 和临时 provider 参数，复用阶段 3 的 provider/protocol 校验。
-- 支持透传 Codex 参数，例如 `agent-bridge run -p moma --client codex exec "只输出 OK"`。
+- 支持透传 Codex 参数，例如 `agent-bridge run -p moma_glm51 --client codex exec "只输出 OK"`。
 - 已覆盖 `agent-bridge run` 的代理启动、健康检查、客户端环境注入、退出清理和失败清理测试。
 
 ## 阶段 5：监控与结构化日志
@@ -278,13 +278,38 @@ agent-bridge run -p openai-compatible --base-url http://127.0.0.1:8000/v1 --mode
 
 ## 当前验收快照
 
-状态：已完成阶段 4、5、6、7；按要求停在阶段 8 之前，尚未执行 thorough code review 和内部包名清理。
+状态：已完成阶段 4、5、6、7，并追加完成交互式配置入口、dashboard/API 日志收敛和 `run` 启动降噪；按要求停在阶段 8 之前，尚未执行 thorough code review 和内部包名清理。
 
 已验证：
 
-- 触达文件格式检查：`black --check --workers 1 ...` 通过。
+- 触达文件格式检查：`black --check --no-cache --workers 1 ...` 输出已格式化；当前环境下 black 偶发需要 `timeout` 才结束。
 - import 排序检查：`isort --check-only ...` 通过。
-- 全量测试：`57 passed`。
+- 全量测试：`57 passed, 10 skipped`。
+
+## 阶段 7.5：配置体验与启动命令简化
+
+状态：已完成（2026-06-19）。
+
+目标：让普通用户在配置好 provider 后，用更短、更稳定的一条命令启动代理和目标客户端。
+
+已完成：
+
+- 新增 `agent-bridge configure` 交互式配置入口。
+- `agent-bridge configure --no-interactive` 支持用命令行参数写入 `config.yaml`，适合远程机器初始化和脚本化部署。
+- 配置命令会写入 `active_provider`、`providers.<name>`、`default_model`、`server` 和兼容用 `upstream`。
+- README 已补充交互式配置、命令行配置和手动 YAML 配置三种方式。
+- 修复 dashboard 刷新 `/logs` 导致看板和终端日志刷屏的问题；dashboard 现在只展示 `/v1/...` API 请求日志。
+- `agent-bridge run` 启动的代理子进程不再把代理日志混进 Codex/Claude 终端；代理启动失败时才输出代理日志尾部。
+- 已修复本机 Codex profile 指向旧 `8080` 和旧 provider 名的问题，当前 `moma` profile 指向 `moma_proxy` / `http://127.0.0.1:17681/v1`。
+- 已端到端验证：`agent-bridge run --config config.yaml -p moma --client codex exec "只输出 OK"` 成功返回 `OK`。
+- 新增短命令：`agent-bridge` 和 `agent-bridge start` 默认读取 `config.yaml`、使用 `active_provider`、默认启动 Codex。
+- 保留 `agent-bridge run ...` 作为完整显式入口，适合指定 provider、client 和透传客户端参数。
+- `agent-bridge configure` 默认同步 Codex `moma` profile 的本地代理 base URL 和模型，避免配置与 profile 漂移；可用 `--skip-codex-profile` 跳过。
+- 已覆盖短命令启动、`configure` 同步 Codex profile、跳过同步等测试。
+
+后续验证：
+
+- 给 Claude Code 路径补同等的一键启动实际验收。
 
 ## 阶段 8：彻底命名与代码清理
 

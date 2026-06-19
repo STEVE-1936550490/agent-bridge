@@ -3,6 +3,8 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import yaml
+
 from moma_proxy.launcher import (
     RunConfig,
     build_client_command,
@@ -108,7 +110,7 @@ def test_run_managed_client_starts_proxy_then_client_and_cleans_up(tmp_path: Pat
 
     created: list[FakeProcess] = []
 
-    def fake_popen(command, env=None):
+    def fake_popen(command, env=None, stdout=None, stderr=None):
         process = FakeProcess(command, env=env)
         created.append(process)
         return process
@@ -164,3 +166,71 @@ def test_run_managed_client_cleans_proxy_when_health_fails(tmp_path: Path) -> No
 
     assert result == 1
     assert terminated is True
+
+
+def test_main_start_uses_run_defaults(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "active_provider": "moma",
+                "providers": {
+                    "moma": {
+                        "base_url": "https://moma.example.com/v1",
+                        "api_key_env": "MOMA_API_KEY",
+                        "model": "ZHIPU/GLM-5.1",
+                        "provider_api": "openai_chat",
+                        "client_protocol": "codex_responses",
+                    }
+                },
+                "server": {"host": "127.0.0.1", "port": 19002},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    captured: list[RunConfig] = []
+
+    def fake_run(config: RunConfig) -> int:
+        captured.append(config)
+        return 0
+
+    with patch("moma_proxy.main.run_managed_client", fake_run):
+        result = main(["start", "--config", str(config_path), "exec", "hello"])
+
+    assert result == 0
+    assert captured[0].config_path == config_path
+    assert captured[0].host == "127.0.0.1"
+    assert captured[0].port == 19002
+    assert captured[0].client == "codex"
+    assert captured[0].client_args == ["exec", "hello"]
+
+
+def test_agent_bridge_options_without_subcommand_default_to_start(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "upstream": {
+                    "base_url": "https://moma.example.com/v1",
+                    "api_key": "${MOMA_API_KEY}",
+                },
+                "server": {"host": "127.0.0.1", "port": 19003},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    captured: list[RunConfig] = []
+
+    def fake_run(config: RunConfig) -> int:
+        captured.append(config)
+        return 0
+
+    with patch("moma_proxy.main.run_managed_client", fake_run):
+        with patch("sys.argv", ["agent-bridge", "--config", str(config_path)]):
+            result = main()
+
+    assert result == 0
+    assert captured[0].config_path == config_path
+    assert captured[0].client == "codex"

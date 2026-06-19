@@ -83,4 +83,5 @@ python -m moma_proxy --config config.yaml
 - Codex via OpenAI-compatible Responses API is the current primary target.
 - MOMA GLM streaming reasoning/content separation is already part of the core
   parser responsibility.
-- Anthropic/Claude Code support is planned but should not regress Codex.
+- Anthropic/Claude Code has a basic Messages compatibility path and should not
+  regress Codex.

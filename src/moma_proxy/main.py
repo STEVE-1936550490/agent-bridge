@@ -17,6 +17,12 @@ from .codex import (
     run_codex_with_moma,
 )
 from .config import Config
+from .configure import (
+    ConfigureOptions,
+    ConfigureSummary,
+    configure_provider,
+    format_configure_summary,
+)
 from .installer import DEFAULT_NPM_REGISTRY, format_install_summary, run_local_install
 from .launcher import RunConfig, run_managed_client
 from .server import run_server
@@ -196,6 +202,72 @@ def _run_from_args(args: argparse.Namespace) -> int:
         return 1
 
 
+def _local_proxy_base_url(host: str, port: int) -> str:
+    connect_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    return f"http://{connect_host}:{port}/v1"
+
+
+def _sync_codex_profile_from_configure_args(
+    args: argparse.Namespace,
+    summary: ConfigureSummary,
+) -> None:
+    if args.skip_codex_profile or summary.client_protocol != "codex_responses":
+        return
+    install_codex_profile(
+        CodexInstallConfig(
+            codex_home=Path(args.codex_home).expanduser(),
+            profile=args.codex_profile,
+            provider=args.codex_provider,
+            model=summary.model,
+            base_url=_local_proxy_base_url(summary.host, summary.port),
+            env_key=args.codex_env_key,
+        )
+    )
+
+
+def _configure_from_args(args: argparse.Namespace) -> int:
+    options = ConfigureOptions(
+        config_path=Path(args.config).expanduser(),
+        provider=args.provider,
+        base_url=args.base_url,
+        api_key=args.api_key,
+        api_key_env=args.api_key_env,
+        model=args.model,
+        provider_api=args.provider_api,
+        client_protocol=args.client_protocol,
+        host=args.host,
+        port=args.port,
+        interactive=not args.no_interactive,
+    )
+    try:
+        summary = configure_provider(options)
+    except (OSError, ValueError) as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    _sync_codex_profile_from_configure_args(args, summary)
+    print(format_configure_summary(summary))
+    return 0
+
+
+def _add_run_command(
+    subparsers: argparse._SubParsersAction,
+    name: str,
+    *,
+    help_text: str,
+) -> argparse.ArgumentParser:
+    run_parser = subparsers.add_parser(name, help=help_text)
+    _add_server_args(run_parser)
+    _add_provider_args(run_parser)
+    run_parser.add_argument("--client", choices=["codex", "claude"], default="codex")
+    run_parser.add_argument("--codex-profile", default=DEFAULT_PROFILE)
+    run_parser.add_argument("--codex-env-key", default=DEFAULT_ENV_KEY)
+    run_parser.add_argument("--codex-api-key", default="dummy")
+    run_parser.add_argument("--claude-api-key", default="dummy")
+    run_parser.add_argument("--startup-timeout", type=float, default=15.0)
+    run_parser.add_argument("client_args", nargs=argparse.REMAINDER)
+    return run_parser
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the top-level CLI parser."""
     parser = argparse.ArgumentParser(
@@ -207,19 +279,62 @@ def build_parser() -> argparse.ArgumentParser:
     _add_server_args(serve_parser)
     _add_provider_args(serve_parser)
 
-    run_parser = subparsers.add_parser(
-        "run",
-        help="Start the proxy, wait for health, then run an agent client",
+    _add_run_command(
+        subparsers,
+        "start",
+        help_text="Start the default configured agent client",
     )
-    _add_server_args(run_parser)
-    _add_provider_args(run_parser)
-    run_parser.add_argument("--client", choices=["codex", "claude"], default="codex")
-    run_parser.add_argument("--codex-profile", default=DEFAULT_PROFILE)
-    run_parser.add_argument("--codex-env-key", default=DEFAULT_ENV_KEY)
-    run_parser.add_argument("--codex-api-key", default="dummy")
-    run_parser.add_argument("--claude-api-key", default="dummy")
-    run_parser.add_argument("--startup-timeout", type=float, default=15.0)
-    run_parser.add_argument("client_args", nargs=argparse.REMAINDER)
+    _add_run_command(
+        subparsers,
+        "run",
+        help_text="Start the proxy, wait for health, then run an agent client",
+    )
+
+    configure_parser = subparsers.add_parser(
+        "configure",
+        help="Interactively create or update provider config",
+    )
+    configure_parser.add_argument(
+        "--config",
+        "-c",
+        default="config.yaml",
+        help="Path to configuration file (default: config.yaml)",
+    )
+    configure_parser.add_argument("--provider", default=None)
+    configure_parser.add_argument("--base-url", default=None)
+    configure_parser.add_argument("--api-key", default=None)
+    configure_parser.add_argument("--api-key-env", default=None)
+    configure_parser.add_argument("--model", default=None)
+    configure_parser.add_argument(
+        "--provider-api",
+        choices=["openai_chat", "openai_responses", "anthropic_messages"],
+        default=None,
+    )
+    configure_parser.add_argument(
+        "--client-protocol",
+        choices=["codex_responses", "anthropic"],
+        default=None,
+    )
+    configure_parser.add_argument("--host", default=None)
+    configure_parser.add_argument("--port", type=int, default=None)
+    configure_parser.add_argument(
+        "--no-interactive",
+        action="store_true",
+        help="Write config from flags without prompting",
+    )
+    configure_parser.add_argument(
+        "--skip-codex-profile",
+        action="store_true",
+        help="Do not update the Codex profile after writing config",
+    )
+    configure_parser.add_argument(
+        "--codex-home",
+        default=str(default_codex_home()),
+        help="Codex home directory (default: $CODEX_HOME or ~/.codex)",
+    )
+    configure_parser.add_argument("--codex-profile", default=DEFAULT_PROFILE)
+    configure_parser.add_argument("--codex-provider", default=DEFAULT_PROVIDER)
+    configure_parser.add_argument("--codex-env-key", default=DEFAULT_ENV_KEY)
 
     setup_parser = subparsers.add_parser(
         "install",
@@ -294,7 +409,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Main entry point."""
+    called_as = Path(sys.argv[0]).name
     argv = list(sys.argv[1:] if argv is None else argv)
+    if called_as == "agent-bridge" and (not argv or argv[0].startswith("-")):
+        if not argv or argv[0] not in {"-h", "--help"}:
+            argv = ["start", *argv]
 
     # Preserve the original CLI shape: `moma-proxy --config config.yaml`.
     if not argv or argv[0].startswith("-"):
@@ -309,8 +428,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command == "serve":
         return _run_server_from_args(args)
-    if args.command == "run":
+    if args.command in {"start", "run"}:
         return _run_from_args(args)
+    if args.command == "configure":
+        return _configure_from_args(args)
     if args.command == "install":
         return _install_from_args(args)
     if args.command == "install-codex":

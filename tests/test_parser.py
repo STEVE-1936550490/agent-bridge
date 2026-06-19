@@ -31,7 +31,7 @@ def test_parse_done_marker():
 def test_parse_content_chunk():
     """Test parser handles content chunk."""
     parser = GLMParser()
-    line = "data: {\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}"
+    line = 'data: {"choices":[{"delta":{"content":"Hello"}}]}'
     result = parser.parse_sse_line(line)
     assert result is not None
     assert result.content_type == ContentType.CONTENT
@@ -41,7 +41,7 @@ def test_parse_content_chunk():
 def test_parse_reasoning_chunk():
     """Test parser handles reasoning content."""
     parser = GLMParser()
-    line = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"Thinking...\"}}]}"
+    line = 'data: {"choices":[{"delta":{"reasoning_content":"Thinking..."}}]}'
     result = parser.parse_sse_line(line)
     assert result is not None
     assert result.content_type == ContentType.REASONING
@@ -74,6 +74,6 @@ def test_parse_invalid_json():
 def test_parse_no_choices():
     """Test parser handles chunks without choices."""
     parser = GLMParser()
-    line = "data: {\"model\":\"glm-5.1\"}"
+    line = 'data: {"model":"glm-5.1"}'
     result = parser.parse_sse_line(line)
     assert result is None

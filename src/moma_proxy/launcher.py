@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -131,28 +132,49 @@ def terminate_process(process: subprocess.Popen) -> None:
         process.wait(timeout=5)
 
 
+def _print_proxy_log_tail(log_file, line_count: int = 40) -> None:
+    """Print recent proxy output after startup failure."""
+    log_file.seek(0)
+    lines = log_file.readlines()
+    if not lines:
+        return
+    print("Proxy output:", file=sys.stderr)
+    for line in lines[-line_count:]:
+        print(line.rstrip(), file=sys.stderr)
+
+
 def run_managed_client(config: RunConfig) -> int:
     """Start proxy, wait for health, run client, then clean up proxy."""
     proxy_command = build_proxy_command(config)
     print(f"Starting AgentBridge proxy: {' '.join(proxy_command)}", file=sys.stderr)
-    proxy = subprocess.Popen(proxy_command)
-    try:
-        url = health_url(config.host, config.port)
-        if not wait_for_health(url, config.startup_timeout, config.poll_interval):
-            returncode = proxy.poll()
-            if returncode is not None:
-                print(f"Error: proxy exited before becoming healthy: {returncode}", file=sys.stderr)
-                return returncode or 1
-            print(f"Error: proxy did not become healthy at {url}", file=sys.stderr)
-            return 1
-
-        client_command = build_client_command(config)
-        print(f"Starting {config.client}: {' '.join(client_command)}", file=sys.stderr)
+    with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as proxy_log:
+        proxy = subprocess.Popen(
+            proxy_command,
+            stdout=proxy_log,
+            stderr=subprocess.STDOUT,
+        )
         try:
-            client = subprocess.Popen(client_command, env=build_client_env(config))
-        except FileNotFoundError:
-            print(f"Error: {config.client} command not found in PATH", file=sys.stderr)
-            return 127
-        return client.wait()
-    finally:
-        terminate_process(proxy)
+            url = health_url(config.host, config.port)
+            if not wait_for_health(url, config.startup_timeout, config.poll_interval):
+                returncode = proxy.poll()
+                if returncode is not None:
+                    print(
+                        f"Error: proxy exited before becoming healthy: {returncode}",
+                        file=sys.stderr,
+                    )
+                    _print_proxy_log_tail(proxy_log)
+                    return returncode or 1
+                print(f"Error: proxy did not become healthy at {url}", file=sys.stderr)
+                _print_proxy_log_tail(proxy_log)
+                return 1
+
+            client_command = build_client_command(config)
+            print(f"Starting {config.client}: {' '.join(client_command)}", file=sys.stderr)
+            try:
+                client = subprocess.Popen(client_command, env=build_client_env(config))
+            except FileNotFoundError:
+                print(f"Error: {config.client} command not found in PATH", file=sys.stderr)
+                return 127
+            return client.wait()
+        finally:
+            terminate_process(proxy)

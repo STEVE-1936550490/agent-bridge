@@ -31,18 +31,25 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _should_store_request_log(path: str) -> bool:
+    """Only user-facing API calls should appear in request logs."""
+    return path.startswith("/v1/")
+
+
 @web.middleware
 async def logging_middleware(request: web.Request, handler):
     """Log all incoming requests and responses."""
     request_id = request.headers.get("X-Request-ID") or new_request_id()
     request[REQ_REQUEST_ID] = request_id
     start_time = time.time()
-    logger.info(
-        "request_started request_id=%s method=%s path=%s",
-        request_id,
-        request.method,
-        request.path,
-    )
+    store_log = _should_store_request_log(request.path)
+    if store_log:
+        logger.info(
+            "request_started request_id=%s method=%s path=%s",
+            request_id,
+            request.method,
+            request.path,
+        )
 
     try:
         response = await handler(request)
@@ -63,8 +70,9 @@ async def logging_middleware(request: web.Request, handler):
             stream_state=request.get(REQ_STREAM_STATE, "complete"),
             token_usage=request.get(REQ_TOKEN_USAGE, TokenUsage()),
         )
-        request.app[APP_REQUEST_LOGS].append(log)
-        logger.info("request_completed %s", log.to_dict())
+        if store_log:
+            request.app[APP_REQUEST_LOGS].append(log)
+            logger.info("request_completed %s", log.to_dict())
         return response
     except Exception as e:
         elapsed = time.time() - start_time
@@ -83,8 +91,9 @@ async def logging_middleware(request: web.Request, handler):
             stream_state=request.get(REQ_STREAM_STATE, "error"),
             error=str(e),
         )
-        request.app["request_logs"].append(log)
-        logger.error("request_failed %s", log.to_dict())
+        if store_log:
+            request.app[APP_REQUEST_LOGS].append(log)
+            logger.error("request_failed %s", log.to_dict())
         raise
 
 

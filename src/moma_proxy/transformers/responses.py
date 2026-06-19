@@ -44,7 +44,7 @@ class ResponsesTransformer:
                 "frequency_penalty": 0.0,
                 "incomplete_details": None,
                 "instructions": "",
-            }
+            },
         }
         return f"event: response.created\ndata: {json.dumps(event_data)}\n\n"
 
@@ -108,7 +108,7 @@ class ResponsesTransformer:
             "logprobs": [],
             "obfuscation": "",
             "output_index": 0,
-            "sequence_number": self.sequence_number
+            "sequence_number": self.sequence_number,
         }
         return f"event: response.output_text.delta\ndata: {json.dumps(event_data)}\n\n"
 
@@ -276,12 +276,8 @@ class ResponsesTransformer:
                 "instructions": "",
                 "model": self.model,
                 "output": self.output_items,
-                "usage": {
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "total_tokens": 0
-                }
-            }
+                "usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
+            },
         }
         return f"event: response.completed\ndata: {json.dumps(event_data)}\n\n"
 
@@ -328,9 +324,7 @@ class ResponsesTransformer:
                     function = tool_call.get("function") or {}
                     arguments_delta = function.get("arguments")
                     if arguments_delta:
-                        yield self.format_function_call_arguments_delta(
-                            state, arguments_delta
-                        )
+                        yield self.format_function_call_arguments_delta(state, arguments_delta)
                 continue
 
             # Send text deltas

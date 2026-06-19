@@ -32,6 +32,7 @@ htmlcov/
 
 # Local config (contains real API keys!)
 config.yaml
+config_old.yaml
 *.local.yaml
 
 # Claude Code local settings (may contain API keys)

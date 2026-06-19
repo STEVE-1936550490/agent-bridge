@@ -357,6 +357,43 @@ async def test_dashboard_serves_log_view() -> None:
 
 
 @pytest.mark.asyncio
+async def test_logs_only_include_api_requests() -> None:
+    seen_payloads: list[dict] = []
+    upstream_runner, upstream_url = await _start_mock_upstream(seen_payloads)
+    proxy_runner, proxy_url = await _start_proxy(upstream_url)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            for path in ("/health", "/dashboard", "/logs"):
+                async with session.get(f"{proxy_url}{path}") as response:
+                    assert response.status == 200
+                    await response.text()
+
+            async with session.post(
+                f"{proxy_url}/v1/responses",
+                headers={"X-Request-ID": "req_api_only"},
+                json={
+                    "model": "ZHIPU/GLM-5.1",
+                    "input": "Say hello",
+                    "stream": False,
+                },
+            ) as response:
+                assert response.status == 200
+                await response.text()
+
+            async with session.get(f"{proxy_url}/logs") as response:
+                assert response.status == 200
+                payload = await response.json()
+
+        logs = payload["data"]
+        assert [log["path"] for log in logs] == ["/v1/responses"]
+        assert logs[0]["request_id"] == "req_api_only"
+    finally:
+        await proxy_runner.cleanup()
+        await upstream_runner.cleanup()
+
+
+@pytest.mark.asyncio
 async def test_anthropic_messages_non_stream_returns_message() -> None:
     seen_payloads: list[dict] = []
     upstream_runner, upstream_url = await _start_mock_upstream(seen_payloads)
