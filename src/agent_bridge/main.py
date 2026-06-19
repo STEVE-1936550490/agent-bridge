@@ -16,7 +16,7 @@ from .codex import (
     install_codex_profile,
     run_codex_with_agent_bridge,
 )
-from .config import Config
+from .config import Config, resolve_config_path
 from .configure import (
     ConfigureOptions,
     ConfigureSummary,
@@ -33,7 +33,7 @@ def _add_server_args(parser: argparse.ArgumentParser) -> None:
         "--config",
         "-c",
         default="config.yaml",
-        help="Path to configuration file (default: config.yaml)",
+        help="Path to configuration file (searches CWD, package dir, ~/.config/agent-bridge, and AGENT_BRIDGE_CONFIG env; default: config.yaml)",
     )
     parser.add_argument(
         "--host",
@@ -86,10 +86,11 @@ def _add_provider_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _run_server_from_args(args: argparse.Namespace) -> int:
+    resolved = resolve_config_path(args.config)
     try:
-        config = Config.from_file(args.config)
+        config = Config.from_file(resolved)
     except FileNotFoundError:
-        print(f"Error: Config file not found: {args.config}", file=sys.stderr)
+        print(f"Error: Config file not found: {resolved}", file=sys.stderr)
         return 1
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -170,11 +171,11 @@ def _install_from_args(args: argparse.Namespace) -> int:
 
 
 def _run_from_args(args: argparse.Namespace) -> int:
-    config_path = Path(args.config).expanduser()
+    config_path = resolve_config_path(args.config)
     try:
         config = Config.from_file(config_path)
     except FileNotFoundError:
-        print(f"Error: Config file not found: {args.config}", file=sys.stderr)
+        print(f"Error: Config file not found: {config_path}", file=sys.stderr)
         return 1
     except ValueError as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -305,7 +306,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--config",
         "-c",
         default="config.yaml",
-        help="Path to configuration file (default: config.yaml)",
+        help="Path to configuration file (searches CWD, package dir, ~/.config/agent-bridge, and AGENT_BRIDGE_CONFIG env; default: config.yaml)",
     )
     configure_parser.add_argument("--provider", default=None)
     configure_parser.add_argument("--base-url", default=None)

@@ -19,6 +19,78 @@ SUPPORTED_PROTOCOL_PAIRS: set[tuple[ClientProtocol, ProviderApi]] = {
     ("codex_responses", "openai_chat"),
 }
 
+DEFAULT_CONFIG_FILENAME = "config.yaml"
+
+
+def _find_config_near_package(filename: str | Path) -> Path | None:
+    """Walk upward from the package directory to find a config file.
+
+    This supports editable installs where config.yaml lives in the project
+    root, which is an ancestor of the package source directory.
+    """
+    try:
+        start = Path(__file__).resolve().parent
+    except (ValueError, OSError):
+        return None
+    for parent in [start, *start.parents]:
+        candidate = parent / filename
+        if candidate.exists():
+            return candidate
+        # Stop at filesystem root – no need to walk the entire tree
+        if parent == parent.parent:
+            break
+    return None
+
+
+def resolve_config_path(path: str | Path | None = None) -> Path:
+    """Resolve the configuration file path by searching known locations.
+
+    Search order when *path* is ``None`` or a bare filename:
+      1. The explicit *path* (if given and absolute, return immediately).
+      2. Current working directory.
+      3. Walk upward from the package directory (editable install support).
+      4. ``~/.config/agent-bridge/config.yaml`` (XDG-style user config).
+      5. The ``AGENT_BRIDGE_CONFIG`` environment variable.
+
+    Returns the first existing path.  If none exists, returns the original
+    *path* (or the CWD default) so that downstream code can raise a clear
+    ``FileNotFoundError``.
+    """
+    if path is None:
+        path = DEFAULT_CONFIG_FILENAME
+    path = Path(path)
+
+    # If the user gave an absolute path, respect it exactly.
+    if path.is_absolute():
+        return path
+
+    # 1. Current working directory
+    cwd_candidate = Path.cwd() / path
+    if cwd_candidate.exists():
+        return cwd_candidate
+
+    # 2. Walk upward from the package directory (editable installs)
+    pkg_candidate = _find_config_near_package(path)
+    if pkg_candidate is not None:
+        return pkg_candidate
+
+    # 3. XDG-style user config directory
+    xdg_dir = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "agent-bridge"
+    xdg_candidate = xdg_dir / path
+    if xdg_candidate.exists():
+        return xdg_candidate
+
+    # 4. AGENT_BRIDGE_CONFIG environment variable
+    env_path = os.environ.get("AGENT_BRIDGE_CONFIG")
+    if env_path:
+        env_candidate = Path(env_path)
+        if env_candidate.exists():
+            return env_candidate
+
+    # Nothing found – return the CWD default so that the caller can raise
+    # a clear error about the missing file.
+    return cwd_candidate
+
 
 @dataclass
 class UpstreamConfig:
